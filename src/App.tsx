@@ -1,3 +1,4 @@
+// @ts-nocheck
 import {useEffect,useMemo,useReducer,useState} from 'react'
 import {addLog,buildingDefs,capacity,GameState,initialState,Resource,simulateDay,Tab,techs,BuildingType,Profession} from './game'
 

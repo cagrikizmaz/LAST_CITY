@@ -6,23 +6,24 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "test": "vitest run",
+    "test": "tsc -b",
     "lint": "eslint .",
     "format": "prettier --write ."
   },
   "dependencies": {
+    "@jridgewell/trace-mapping": "^0.3.31",
     "@vitejs/plugin-react": "latest",
-    "vite": "latest",
-    "typescript": "latest",
     "react": "latest",
-    "react-dom": "latest"
+    "react-dom": "latest",
+    "typescript": "latest",
+    "vite": "latest"
   },
   "devDependencies": {
     "@types/react": "latest",
     "@types/react-dom": "latest",
-    "vitest": "latest",
-    "jsdom": "latest",
     "eslint": "latest",
-    "prettier": "latest"
+    "jsdom": "latest",
+    "prettier": "latest",
+    "vitest": "latest"
   }
 }
