@@ -1,0 +1,3 @@
+import {describe,expect,it} from 'vitest'
+import {initialState,simulateDay} from './game'
+describe('LAST CITY günlük simülasyonu',()=>{it('nüfus gıda ve su tüketir',()=>{const s=initialState();const n=simulateDay(s);expect(n.resources.food).toBeLessThan(s.resources.food);expect(n.resources.water).toBeLessThan(s.resources.water)});it('jeneratör yakıt tüketir',()=>{const s=initialState();expect(simulateDay(s).resources.fuel).toBeLessThan(s.resources.fuel)});it('state deterministiktir',()=>{const s=initialState();expect(simulateDay(s)).toEqual(simulateDay(s))});it('başlangıçta 43 vatandaş vardır',()=>expect(initialState().citizens).toHaveLength(43))})
