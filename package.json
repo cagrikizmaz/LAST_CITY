@@ -1,12 +1,12 @@
 {
-  "name": "last-city",
+  "name": "kulden",
   "private": true,
   "version": "0.1.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
-    "test": "tsc -b",
+    "build": "tsc --noEmit && tsc -p tsconfig.node.json --noEmit && vite build",
+    "test": "vitest run",
     "lint": "eslint .",
     "format": "prettier --write ."
   },
