@@ -1,303 +1,321 @@
 ﻿// @vitest-environment jsdom
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import { expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { App } from "./App";
-import { emptyState, loadGame } from "./game";
-
-it("hires and delivers through the UI, and persists both actions", async () => {
+import * as g from "./game";
+let container: HTMLDivElement;
+let root: ReturnType<typeof createRoot>;
+const saved = () => g.loadGame(localStorage.getItem("last-city-workers-v2"));
+const button = (text: string) =>
+  Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
+    (b) => b.textContent?.includes(text),
+  )!;
+const click = async (text: string) => {
+  const b = button(text);
+  expect(b, text).toBeDefined();
+  expect(b.disabled, text).toBe(false);
+  await act(async () => b.click());
+};
+const clickLabel = async (label: string) => {
+  const target = container.querySelector<HTMLButtonElement>(
+    `button[aria-label="${label}"]`,
+  )!;
+  expect(target).not.toBeNull();
+  expect(target.disabled).toBe(false);
+  await act(async () => target.click());
+};
+beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   vi.useFakeTimers();
-  localStorage.setItem("last-city-workers-v2", JSON.stringify({
-    ...emptyState(), money: 25, level: 2, stock: { wood: 20, egg: 10, fruit: 0 },
-    order: { id: 1, needs: { wood: 20, egg: 10, fruit: 0 }, reward: 65, remaining: 60, duration: 90 },
-  }));
-  const container = document.createElement("div");
-  document.body.append(container);
-  const root = createRoot(container);
-  const saved = () => loadGame(localStorage.getItem("last-city-workers-v2"));
-  try {
-    await act(async () => root.render(<App />));
-    const hire = container.querySelector<HTMLButtonElement>(".hire-row button")!;
-    expect(hire.disabled).toBe(false);
-    await act(async () => hire.click());
-    expect(saved().workers).toHaveLength(4);
-    expect(container.querySelector(".team-bar")?.textContent).toContain("4 işçi");
-    await act(async () => container.querySelector<HTMLButtonElement>('button[aria-label="Odun işçi ata"]')!.click());
-    expect(saved().workers.filter(w => w.job === "wood")).toHaveLength(1);
-    await act(async () => container.querySelector<HTMLButtonElement>('button[aria-label="Odun işçi çıkart"]')!.click());
-    expect(saved().workers.filter(w => w.job === "wood")).toHaveLength(0);
-    expect(saved().money).toBe(0);
-    expect(hire.disabled).toBe(true);
-    await act(async () => container.querySelector<HTMLButtonElement>(".fulfill-button")!.click());
-    expect(saved().money).toBe(65);
-    expect(saved().stock.wood).toBe(0);
-    expect(container.querySelector(".order-card")?.textContent).toContain("Başarılı");
-    await act(async () => vi.advanceTimersByTime(1000));
-    expect(saved().consumptionIn).toBe(30);
-  } finally {
-    await act(async () => root.unmount());
-    container.remove();
-    localStorage.clear();
-    vi.useRealTimers();
-  }
-});
-
-
-it("browses all 100 inventory items and production levels", async () => {
-  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   localStorage.clear();
-  const container = document.createElement("div");
-  const root = createRoot(container);
-  try {
-    await act(async () => root.render(<App />));
-    expect(container.querySelectorAll(".production-card")).toHaveLength(15);
-    const next = () => Array.from(container.querySelectorAll("button")).find(b => b.textContent === "Sonraki →")!;
-    for (let i = 0; i < 6; i++) await act(async () => next().click());
-    expect(container.querySelectorAll(".production-card")).toHaveLength(10);
-    expect(container.querySelector(".production-grid")?.textContent).toContain("Şehir Çekirdeği");
-    expect(next().disabled).toBe(true);
-    const filter = container.querySelector<HTMLSelectElement>('select[aria-label="Envanter filtresi"]')!;
-    await act(async () => { filter.value = "all"; filter.dispatchEvent(new Event("change", { bubbles: true })); });
-    expect(container.querySelectorAll(".stock-item")).toHaveLength(8);
-    const inventoryNext = container.querySelector<HTMLButtonElement>('button[aria-label="Sonraki envanter sayfası"]')!;
-    for (let i = 0; i < 12; i++) await act(async () => inventoryNext.click());
-    expect(container.querySelector(".inventory")?.textContent).toContain("Şehir Çekirdeği");
-    expect(inventoryNext.disabled).toBe(true);
-  } finally { await act(async () => root.unmount()); localStorage.clear(); }
-});
-
-
-it("shows strike notices and countdown, hires a paid replacement and dismisses notices", async () => {
-  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
-  vi.useFakeTimers();
-  const base = emptyState();
-  localStorage.setItem("last-city-workers-v2", JSON.stringify({ ...base, money: 100, shelterCapacity: 6,
-    laborNotices: [{ id: 1, text: "Test site: 1 worker greve started." }], laborSequence: 1,
-    workers: base.workers.map((w, i) => i === 0 ? { ...w, job: "wood", strikeRemaining: 600 } : w) }));
-  const container = document.createElement("div");
-  const root = createRoot(container);
-  try {
-    await act(async () => root.render(<App />));
-    expect(container.querySelector(".labor-notice")?.textContent).toContain("greve");
-    expect(container.querySelector(".team-bar")?.textContent).toContain("1 grevde");
-    expect(container.querySelector(".strike-info")?.textContent).toContain("10:00");
-    expect(container.querySelector(".card-status")?.textContent).toContain("GREV");
-    const replacement = container.querySelector<HTMLButtonElement>(".replacement-button")!;
-    await act(async () => replacement.click());
-    const saved = loadGame(localStorage.getItem("last-city-workers-v2"));
-    expect(saved.money).toBe(75);
-    expect(saved.workers).toHaveLength(4);
-    expect(saved.workers.filter(w => w.job === "wood" && !w.strikeRemaining)).toHaveLength(1);
-    await act(async () => vi.advanceTimersByTime(1000));
-    expect(container.querySelector(".strike-info")?.textContent).toContain("9:59");
-    await act(async () => container.querySelector<HTMLButtonElement>('.labor-notice button')!.click());
-    expect(container.querySelector(".labor-notice")).toBeNull();
-    expect(loadGame(localStorage.getItem("last-city-workers-v2")).laborNotices).toEqual([]);
-  } finally { await act(async () => root.unmount()); localStorage.clear(); vi.useRealTimers(); }
-});
-
-
-it("sorts stock globally and focuses an inventory product across production pages and filters", async () => {
-  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
-  const base = emptyState();
-  localStorage.setItem("last-city-workers-v2", JSON.stringify({ ...base, level: 14,
-    stock: { ...Object.fromEntries(Object.keys(base.stock).map(r => [r, 20])), egg: 3, product14: 0 } }));
-  const container = document.createElement("div");
+  container = document.createElement("div");
   document.body.append(container);
-  const root = createRoot(container);
-  try {
-    await act(async () => root.render(<App />));
-    const quantities = () => Array.from(container.querySelectorAll(".stock-item strong")).map(n => Number(n.textContent));
-    expect(quantities()).toEqual([0, 3, 20, 20, 20, 20, 20, 20]);
-    await act(async () => container.querySelectorAll<HTMLButtonElement>(".tabs button")[2].click());
-    expect(container.querySelectorAll(".production-card")).toHaveLength(0);
-    const item = container.querySelector<HTMLButtonElement>(".stock-item")!;
-    await act(async () => item.click());
-    const target = container.querySelector("#production-14");
-    expect(target).not.toBeNull();
-    expect(target?.classList.contains("is-focused")).toBe(true);
-    expect(document.activeElement).toBe(target);
-    expect(container.querySelectorAll(".production-card")).toHaveLength(15);
-    item.focus();
-    await act(async () => item.click());
-    expect(document.activeElement).toBe(target);
-  } finally { await act(async () => root.unmount()); container.remove(); localStorage.clear(); }
+  root = createRoot(container);
+});
+afterEach(async () => {
+  await act(async () => root.unmount());
+  container.remove();
+  localStorage.clear();
+  vi.useRealTimers();
+});
+const render = async (state?: g.GameState) => {
+  if (state)
+    localStorage.setItem("last-city-workers-v2", JSON.stringify(state));
+  await act(async () => root.render(<App />));
+};
+it("browses categories, buys a site and equipment, assigns staff and persists production", async () => {
+  await render();
+  expect(container.querySelectorAll(".category-card")).toHaveLength(4);
+  await click("Orman");
+  expect(container.querySelectorAll(".production-card")).toHaveLength(2);
+  await click("Oduncu");
+  await click("Sahayı satın al");
+  expect(saved().money).toBe(150);
+  expect(button("+ İşçi ata").disabled).toBe(false);
+  expect(container.querySelector(".manager-card")).toBeNull();
+  await click("Deniz");
+  expect(container.querySelector(".assistant-popup")?.textContent).toContain(
+    "balta gerekli",
+  );
+  await click("1 adet al");
+  await click("1 adet al");
+  await clickLabel("Asistanı kapat");
+  await click("+ İşçi ata");
+  await act(async () => vi.advanceTimersByTime(5000));
+  expect(saved().stock.wood).toBe(1);
+  expect(container.querySelector(".resource-strip")?.textContent).toContain(
+    "Odun1",
+  );
+  expect(container.querySelector(".site-storage")?.textContent).toContain(
+    "1/100",
+  );
+  await click("Depoyu +100 yükselt");
+  expect(saved().warehouseCapacity.wood).toBe(200);
+  await click("− İşçi çıkart");
+  expect(saved().workers[0].job).toBe("idle");
+});
+it("shows globally doubled prices and prevents unaffordable site purchases", async () => {
+  await render(g.purchaseSite(g.emptyState(), "lumber"));
+  await click("Tarım");
+  await click("Tarla");
+  expect(button("Sahayı satın al").textContent).toContain("200₺");
+  expect(button("Sahayı satın al").disabled).toBe(true);
+});
+it("adjusts each product with steppers and displays exact live shortages", async () => {
+  const state = g.purchaseSite({ ...g.emptyState(), money: 1000 }, "barn");
+  await render(state);
+  await click("Hayvancılık");
+  await click("İnek Ahırı");
+  expect(container.querySelector(".recipes-panel")?.textContent).toContain(
+    "2 Süt + 1 Tereyağı",
+  );
+  expect(container.querySelector(".recipes-panel")?.textContent).not.toContain(
+    "Üretim sırası",
+  );
+  expect(container.querySelectorAll(".product-progress")).toHaveLength(4);
+  expect(
+    container.querySelector('button[aria-label="Süt üretimini artır"]'),
+  ).toBeNull();
+  await clickLabel("Kaymak üretimini artır");
+  await clickLabel("Kaymak üretimini artır");
+  expect(saved().sites.barn.queue).toHaveLength(1);
+  expect(
+    container.querySelector('[aria-label="Kaymak üretimi"]')?.textContent,
+  ).toContain("Süt yetersiz, 4 tane daha gerekiyor.");
+  await clickLabel("Kaymak üretimini azalt");
+  expect(
+    container.querySelector('[aria-label="Kaymak üretimi"]')?.textContent,
+  ).toContain("Süt yetersiz, 2 tane daha gerekiyor.");
+  await clickLabel("Kaymak üretimini azalt");
+  expect(saved().sites.barn.queue).toHaveLength(0);
+  await click("Sahayı yükselt");
+  expect(saved().sites.barn.level).toBe(2);
+});
+it("opens the owned site from the resource strip beside the clock", async () => {
+  await render(g.purchaseSite(g.emptyState(), "coop"));
+  const nav = container.querySelector("header .resource-strip")!;
+  expect(nav.previousElementSibling?.getAttribute("aria-label")).toBe(
+    "Oyun saati",
+  );
+  await act(async () =>
+    nav.querySelector<HTMLButtonElement>("button")!.click(),
+  );
+  expect(container.querySelector("h1")?.textContent).toBe("Kümes");
+  expect(
+    container.querySelector(".site-overview .site-storage")?.textContent,
+  ).toContain("Yumurta");
+  expect(container.querySelector(".storage-chart")).toBeNull();
+  expect(nav.textContent).toContain("0/100");
+  await clickLabel("Yumurta deposunu yükselt");
+  expect(nav.textContent).toContain("0/200");
+  expect(saved().warehouseCapacity.egg).toBe(200);
+});
+it("hires, expands shelter and delivers an order without unlocking new sites", async () => {
+  const state = g.purchaseSite({ ...g.emptyState(), money: 500 }, "lumber");
+  await render({
+    ...state,
+    stock: { ...state.stock, wood: 10 },
+    order: {
+      id: 1,
+      needs: { ...g.zeroStock(), wood: 10 },
+      reward: 20,
+      duration: 60,
+      remaining: 60,
+    },
+  });
+  await click("Barınak +3");
+  expect(saved().shelterCapacity).toBe(6);
+  await click("Siparişi teslim et");
+  expect(saved().money).toBe(390);
+  expect(saved().stock.wood).toBe(0);
+  expect(Object.keys(saved().sites)).toEqual(["lumber"]);
+});
+it("pauses timers and skips from evening to morning with wage settlement", async () => {
+  await render({ ...g.emptyState(), minuteOfDay: 1200 });
+  await click("Duraklat");
+  await act(async () => vi.advanceTimersByTime(3000));
+  expect(saved().minuteOfDay).toBe(1200);
+  await click("Sabaha geç");
+  expect(saved().minuteOfDay).toBe(480);
+  expect(saved().money).toBe(242.5);
+  expect(saved().day).toBe(2);
+});
+it("removes saved broken equipment and requests a replacement", async () => {
+  let state = g.buyEquipment(
+    g.purchaseSite(g.emptyState(), "lumber"),
+    "lumber",
+    "axe",
+  );
+  state = {
+    ...state,
+    equipment: state.equipment.map((e) => ({ ...e, durability: 0 })),
+  };
+  await render(state);
+  await click("Orman");
+  await click("Oduncu");
+  expect(
+    container.querySelector(".equipment-panel")?.textContent,
+  ).not.toContain("Kırık");
+  expect(container.querySelectorAll(".equipment-item")).toHaveLength(0);
+  expect(saved().equipment).toEqual([]);
+  await click("Deniz");
+  expect(container.querySelector(".assistant-popup")?.textContent).toContain(
+    "balta gerekli",
+  );
 });
 
-it("keeps inventory ascending as production changes quantities", async () => {
-  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
-  vi.useFakeTimers();
-  const base = emptyState();
-  localStorage.setItem("last-city-workers-v2", JSON.stringify({ ...base, level: 2,
-    stock: { ...base.stock, egg: 1 }, workers: base.workers.map((w, i) => i === 0 ? { ...w, job: "wood", progress: 80 } : w) }));
-  const container = document.createElement("div");
-  const root = createRoot(container);
-  try {
-    await act(async () => root.render(<App />));
-    const first = () => container.querySelector(".stock-item small")?.textContent;
-    expect(first()).toBe("Odun");
-    await act(async () => vi.advanceTimersByTime(6000));
-    expect(first()).toBe("Yumurta");
-    expect(Array.from(container.querySelectorAll(".stock-item strong")).map(n => Number(n.textContent))).toEqual([1, 2]);
-  } finally { await act(async () => root.unmount()); localStorage.clear(); vi.useRealTimers(); }
+it("summarizes category inventory and needs and opens assistants without taking over the page", async () => {
+  let state = g.purchaseSite({ ...g.emptyState(), money: 1000 }, "barn");
+  const milk = g.resources.find((r) => g.resourceNames[r] === "Süt")!;
+  const cream = g.resources.find((r) => g.resourceNames[r] === "Kaymak")!;
+  state = { ...state, stock: { ...state.stock, [milk]: 7 } };
+  state = g.requestProduction(state, "barn", cream, 10);
+  await render(state);
+  const card = container.querySelector(".category-livestock")!;
+  expect(card.textContent).toContain("Süt7");
+  expect(card.textContent).toContain("Süt: 13 adet eksik");
+  expect(card.textContent).toContain("Süt kovası eksik");
+  expect(container.querySelector('[role="dialog"]')).toBeNull();
+  await click("Elif");
+  expect(container.querySelector('[role="dialog"]')?.textContent).toContain(
+    "Süt yetersiz, 13 tane daha gerekiyor.",
+  );
+  expect(document.activeElement?.getAttribute("aria-label")).toBe(
+    "Asistanı kapat",
+  );
+  await act(async () =>
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })),
+  );
+  expect(container.querySelector('[role="dialog"]')).toBeNull();
+  expect(document.activeElement?.getAttribute("aria-label")).toContain(
+    "Hayvancılık asistanı",
+  );
+});
+it("updates separate animated progress bars and shortages as automatic milk is produced", async () => {
+  let state = g.purchaseSite({ ...g.emptyState(), money: 1000 }, "barn");
+  const definition = g.siteDefinitions.find((s) => s.id === "barn")!;
+  for (const type of definition.equipment)
+    state = g.buyEquipment(state, "barn", type);
+  state = g.assignJob(state, "w1", definition.job);
+  await render(state);
+  await click("Hayvancılık");
+  await click("İnek Ahırı");
+  await clickLabel("Kaymak üretimini artır");
+  await clickLabel("Peynir üretimini artır");
+  await act(async () => vi.advanceTimersByTime(2000));
+  const milkBar = container.querySelector(
+    '[aria-label="Süt üretim ilerlemesi"]',
+  )!;
+  expect(milkBar.getAttribute("aria-valuenow")).toBe("40");
+  expect(milkBar.classList.contains("is-producing")).toBe(true);
+  expect(
+    container
+      .querySelector('[aria-label="Peynir üretim ilerlemesi"]')
+      ?.getAttribute("aria-valuenow"),
+  ).toBe("0");
+  await act(async () => vi.advanceTimersByTime(3000));
+  expect(
+    container.querySelector('[aria-label="Kaymak üretimi"]')?.textContent,
+  ).toContain("Süt yetersiz, 1 tane daha gerekiyor.");
+  await click("Duraklat");
+  expect(
+    container.querySelectorAll(".product-progress.is-producing"),
+  ).toHaveLength(0);
 });
 
-it("upgrades the warehouse, reorders by fill ratio and saves the purchase", async () => {
-  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
-  vi.useFakeTimers();
-  const base = emptyState();
-  localStorage.setItem("last-city-workers-v2", JSON.stringify({ ...base, money: 100, level: 2,
-    stock: { ...base.stock, wood: 100, egg: 80 } }));
-  const container = document.createElement("div");
-  const root = createRoot(container);
-  try {
-    await act(async () => root.render(<App />));
-    const first = () => container.querySelector(".warehouse-item")?.getAttribute("data-resource");
-    expect(first()).toBe("wood");
-    expect(container.querySelector(".left-panel")?.children[1].getAttribute("aria-label")).toBe("Depo");
-    await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Odun deposunu y?kselt"]')!.click());
-    const saved = loadGame(localStorage.getItem("last-city-workers-v2"));
-    expect(saved.money).toBe(0);
-    expect(saved.warehouseCapacity.wood).toBe(200);
-    expect(first()).toBe("egg");
-    expect(container.querySelector<HTMLButtonElement>('[aria-label="Odun deposunu y?kselt"]')!.disabled).toBe(true);
-  } finally { await act(async () => root.unmount()); localStorage.clear(); vi.useRealTimers(); }
+it("upgrades affordable equipment in a group and regroups the results", async () => {
+  let state = g.purchaseSite({ ...g.emptyState(), money: 1000 }, "lumber");
+  for (let i = 0; i < 5; i++) state = g.buyEquipment(state, "lumber", "axe");
+  await render({ ...state, money: g.equipmentTypes.axe.price * 4 });
+  await click("Orman");
+  await click("Oduncu");
+  expect(container.querySelectorAll(".equipment-item")).toHaveLength(1);
+  expect(container.querySelector(".equipment-item")?.textContent).toContain(
+    "5 adet · Sv. 1",
+  );
+  await click("Yükselt · 4/5 adet");
+  expect(saved().money).toBe(0);
+  expect(container.querySelectorAll(".equipment-item")).toHaveLength(2);
+  expect(container.querySelector(".equipment-list")?.textContent).toContain(
+    "4 adet · Sv. 2",
+  );
+  expect(container.querySelector(".equipment-list")?.textContent).toContain(
+    "1 adet · Sv. 1",
+  );
+});
+it("selects equipment purchase quantity and keeps management in the shared sidebar", async () => {
+  await render(g.purchaseSite({ ...g.emptyState(), money: 1000 }, "barn"));
+  expect(container.textContent).not.toContain("Şehir günlüğü");
+  expect(
+    container.querySelector(".city-sidebar .site-warehouse"),
+  ).not.toBeNull();
+  await click("Hayvancılık");
+  expect(
+    container.querySelector(".city-sidebar .site-warehouse"),
+  ).not.toBeNull();
+  await click("İnek Ahırı");
+  const definition = g.siteDefinitions.find((s) => s.id === "barn")!;
+  const type = definition.equipment[0];
+  const name = g.equipmentTypes[type].name;
+  await clickLabel(`${name} alımını artır`);
+  await clickLabel(`${name} alımını artır`);
+  await clickLabel(`${name} alımını azalt`);
+  const before = saved().money;
+  await click("Satın al · 2 adet");
+  expect(saved().equipment.filter((e) => e.type === type)).toHaveLength(2);
+  expect(saved().money).toBe(before - 2 * g.equipmentTypes[type].price);
+  expect(container.querySelector(".site-detail .site-warehouse")).toBeNull();
+  expect(
+    container
+      .querySelector(".site-overview")
+      ?.nextElementSibling?.classList.contains("recipes-panel"),
+  ).toBe(true);
 });
 
-
-it("shows unhoused workers and persists shelter construction before assignment", async () => {
-  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
-  vi.useFakeTimers();
-  const base = emptyState();
-  localStorage.setItem("last-city-workers-v2", JSON.stringify({ ...base, money: 100,
-    workers: [...base.workers.map(w => ({ ...w, job: "wood" })), { id: "w4", name: "", role: "Toplayıcı", job: "idle", progress: 0 }] }));
-  const container = document.createElement("div");
-  const root = createRoot(container);
-  try {
-    await act(async () => root.render(<App />));
-    const assign = () => container.querySelector<HTMLButtonElement>('button[aria-label="Odun işçi ata"]')!;
-    expect(assign().disabled).toBe(true);
-    expect(container.querySelector(".team-bar")?.textContent).toContain("1 barınaksız");
-    expect(container.querySelector<HTMLButtonElement>(".replacement-button")!.disabled).toBe(true);
-    await act(async () => container.querySelector<HTMLButtonElement>(".shelter-card button")!.click());
-    expect(loadGame(localStorage.getItem("last-city-workers-v2")).shelterCapacity).toBe(6);
-    expect(loadGame(localStorage.getItem("last-city-workers-v2")).money).toBe(70);
-    expect(assign().disabled).toBe(false);
-    await act(async () => assign().click());
-    expect(loadGame(localStorage.getItem("last-city-workers-v2")).workers[3].job).toBe("wood");
-    expect(container.querySelector(".team-bar")?.textContent).toContain("4 görevde");
-  } finally { await act(async () => root.unmount()); localStorage.clear(); vi.useRealTimers(); }
-});
-
-
-it("marks full warehouses as stopped and resumes production after a paid delivery", async () => {
-  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
-  vi.useFakeTimers();
-  const base = emptyState();
-  localStorage.setItem("last-city-workers-v2", JSON.stringify({ ...base,
-    stock: { ...base.stock, wood: 100 }, workers: base.workers.map(w => ({ ...w, job: "wood", progress: 80 })),
-    order: { id: 1, needs: { ...base.stock, wood: 10 }, reward: 20, remaining: 60, duration: 60 } }));
-  const container = document.createElement("div");
-  const root = createRoot(container);
-  const saved = () => loadGame(localStorage.getItem("last-city-workers-v2"));
-  try {
-    await act(async () => root.render(<App />));
-    expect(container.querySelector(".card-status")?.textContent).toBe("DEPO DOLU");
-    expect(container.querySelector(".live-status")?.textContent).toContain("0 işçi üretimde");
-    await act(async () => vi.advanceTimersByTime(1000));
-    expect(saved().stock.wood).toBe(100);
-    expect(saved().money).toBe(0);
-    await act(async () => container.querySelector<HTMLButtonElement>(".fulfill-button")!.click());
-    expect(saved().money).toBe(20);
-    expect(container.querySelector(".card-status")?.textContent).toContain("ÜRETİMDE");
-    await act(async () => vi.advanceTimersByTime(1000));
-    expect(saved().stock.wood).toBe(93);
-    expect(saved().money).toBe(20);
-  } finally { await act(async () => root.unmount()); localStorage.clear(); vi.useRealTimers(); }
-});
-
-
-it("pauses and resumes the clock through the UI without catching up", async () => {
-  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
-  vi.useFakeTimers();
-  localStorage.setItem("last-city-workers-v2", JSON.stringify(emptyState()));
-  const container = document.createElement("div");
-  const root = createRoot(container);
-  const saved = () => loadGame(localStorage.getItem("last-city-workers-v2"));
-  try {
-    await act(async () => root.render(<App />));
-    const button = () => container.querySelector<HTMLButtonElement>(".clock-controls button")!;
-    expect(container.querySelector(".clock-controls strong")?.textContent).toBe("08:00");
-    await act(async () => button().click());
-    const paused = localStorage.getItem("last-city-workers-v2");
-    await act(async () => vi.advanceTimersByTime(60000));
-    expect(localStorage.getItem("last-city-workers-v2")).toBe(paused);
-    expect(button().getAttribute("aria-pressed")).toBe("true");
-    await act(async () => button().click());
-    await act(async () => vi.advanceTimersByTime(1000));
-    expect(saved().minuteOfDay).toBe(481);
-    expect(saved().consumptionIn).toBe(30);
-    expect(container.querySelector(".clock-controls strong")?.textContent).toBe("08:01");
-  } finally {
-    await act(async () => root.unmount());
-    localStorage.clear();
-    vi.useRealTimers();
-  }
-});
-
-
-it("offers next day at 20:00 and persists the morning when clicked", async () => {
-  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
-  vi.useFakeTimers();
-  localStorage.setItem("last-city-workers-v2", JSON.stringify({ ...emptyState(), minuteOfDay: 1199 }));
-  const container = document.createElement("div");
-  const root = createRoot(container);
-  try {
-    await act(async () => root.render(<App />));
-    expect(container.querySelector(".next-day-button")).toBeNull();
-    await act(async () => vi.advanceTimersByTime(1000));
-    expect(container.querySelector(".clock-controls strong")?.textContent).toBe("20:00");
-    const before = loadGame(localStorage.getItem("last-city-workers-v2"));
-    await act(async () => container.querySelector<HTMLButtonElement>(".next-day-button")!.click());
-    const after = loadGame(localStorage.getItem("last-city-workers-v2"));
-    expect(after.day).toBe(2);
-    expect(after.money).toBe(-0.75);
-    expect(container.querySelector(".payroll-card")?.textContent).toContain("0,75");
-    expect(container.querySelector(".camp-card")).toBeNull();
-    expect(after.minuteOfDay).toBe(480);
-    expect(after.consumptionIn).toBe(before.consumptionIn);
-    expect(after.orderIn).toBe(before.orderIn);
-    expect(container.querySelector(".next-day-button")).toBeNull();
-    expect(container.querySelector(".clock-controls strong")?.textContent).toBe("08:00");
-  } finally {
-    await act(async () => root.unmount());
-    localStorage.clear();
-    vi.useRealTimers();
-  }
-});
-
-
-it.each([true, false])("settles the order through the next-day button (enough stock: %s)", async (enough) => {
-  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
-  vi.useFakeTimers();
-  const base = emptyState();
-  localStorage.setItem("last-city-workers-v2", JSON.stringify({ ...base, minuteOfDay: 1200,
-    stock: { ...base.stock, wood: enough ? 10 : 9 },
-    order: { id: 1, needs: { ...base.stock, wood: 10 }, reward: 20, remaining: 60, duration: 90 } }));
-  const container = document.createElement("div");
-  const root = createRoot(container);
-  try {
-    await act(async () => root.render(<App />));
-    await act(async () => container.querySelector<HTMLButtonElement>(".next-day-button")!.click());
-    const saved = loadGame(localStorage.getItem("last-city-workers-v2"));
-    expect(saved.order).toBeNull();
-    expect(saved.money).toBe(enough ? 19.25 : -10.75);
-    expect(saved.lastOrder?.success).toBe(enough);
-    expect(container.querySelector(".order-card")?.textContent).toContain(enough ? "Ba\u015far\u0131l\u0131" : "Ba\u015far\u0131s\u0131z");
-  } finally {
-    await act(async () => root.unmount());
-    localStorage.clear();
-    vi.useRealTimers();
-  }
+it("centralizes management and only hires from assignment after idle workers run out", async () => {
+  await render(g.purchaseSite({ ...g.emptyState(), money: 1000 }, "lumber"));
+  expect(button("Yeni işçi al")).toBeUndefined();
+  const management = container.querySelector(".management-summary")!;
+  expect(management.textContent).toContain("Barınak sayısı1");
+  expect(management.textContent).toContain("Kalan işçi / yatak3 / 3");
+  expect(management.textContent).toContain("Boşta3");
+  await click("Orman");
+  await click("Oduncu");
+  const before = saved().money;
+  for (let i = 0; i < 3; i++) await click("+ İşçi ata");
+  expect(saved().money).toBe(before);
+  expect(saved().workers).toHaveLength(3);
+  expect(button("İşçi al + ata").disabled).toBe(true);
+  await click("Sahayı yükselt");
+  expect(button("İşçi al + ata").disabled).toBe(true);
+  await click("Barınak +3");
+  const beforeHire = saved().money;
+  await click("İşçi al + ata");
+  expect(saved().workers).toHaveLength(4);
+  expect(saved().workers[3].job).toBe("wood");
+  expect(saved().money).toBe(beforeHire - 25);
+  await click("− İşçi çıkart");
+  expect(button("+ İşçi ata").disabled).toBe(false);
+  expect(button("İşçi al + ata")).toBeUndefined();
 });

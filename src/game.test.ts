@@ -1,542 +1,605 @@
 ﻿import { describe, expect, it } from "vitest";
-import { dailyPayroll, dailyWagePerWorker, skipToMorning, buildShelter, isHoused, shelterCost, warehouseResources, warehouseUpgradeCost, upgradeWarehouse, foodResources, foodStock, hireForJob, changeWorkers, assignJob, emptyState, levelInfo, simulateTick, hireWorker, hiringCost, fulfillOrder, loadGame, zeroStock } from "./game";
-
-describe("işçi üretim döngüsü", () => {
-  it("üretim stok oluşturur ama para kazandırmaz", () => {
-    let state = assignJob(emptyState(), "w1", "wood");
-    for (let i = 0; i < 5; i += 1) state = simulateTick(state);
-    expect(state.stock.wood).toBe(1);
-    expect(state.money).toBe(0);
-  });
-  it("ürün fiyatları seviye ile artar", () => {
-    expect(levelInfo[1].price).toBe(1);
-    expect(levelInfo[2].price).toBe(1.25);
-    expect(levelInfo[3].price).toBe(1.5);
-  });
-});
-
-const ordered = () => ({ ...emptyState(), order: { id: 1, needs: { ...zeroStock(), wood: 20, egg: 10, fruit: 3 }, reward: 74, remaining: 2, duration: 90 }, stock: { ...zeroStock(), wood: 20, egg: 10, fruit: 3 } });
-describe("economy", () => {
-  it("charges for each hire and rejects insufficient funds", () => {
-    const initial = emptyState();
-    expect(hireWorker(initial)).toBe(initial);
-    const hired = hireWorker({ ...initial, money: 25 });
-    expect(hired.workers).toHaveLength(4);
-    expect(hired.money).toBe(0);
-    expect(hired.selectedWorker).toBe(hired.workers[3].id);
-    expect(hiringCost(hired)).toBe(40);
-    expect(new Set(hired.workers.map(w => w.id)).size).toBe(4);
-  });
-  it("keeps food stocks and produces at full speed even with legacy shortages", () => {
-    const state = { ...emptyState(), level: 3, shortage: true, consumptionIn: 1,
-      stock: { ...zeroStock(), egg: 2, fruit: 3 } };
-    const next = simulateTick(assignJob(state, "w1", "wood"));
-    expect(next.stock).toEqual(state.stock);
-    expect(next.workers[0].progress).toBe(20);
-    expect(loadGame(JSON.stringify(state)).shortage).toBe(false);
-  });
-  it("delivers early exactly once and pays the reward", () => {
-    const state = ordered();
-    const next = fulfillOrder(state);
-    expect(next.stock).toEqual({ ...zeroStock(), wood: 0, egg: 0, fruit: 0 });
-    expect(next.money).toBe(74);
-    expect(next.order).toBeNull();
-    expect(fulfillOrder(next)).toBe(next);
-    expect(state.stock.wood).toBe(20);
-  });
-  it("waits until the deadline and automatically succeeds", () => {
-    const first = simulateTick(ordered());
-    expect(first.order?.remaining).toBe(1);
-    expect(first.money).toBe(0);
-    const next = simulateTick(first);
-    expect(next.lastOrder?.success).toBe(true);
-    expect(next.money).toBe(74);
-  });
-  it("rejects incomplete early delivery and fails without taking partial stock", () => {
-    const state = { ...ordered(), stock: { ...zeroStock(), wood: 19, egg: 10, fruit: 3 } };
-    expect(fulfillOrder(state)).toBe(state);
-    const next = simulateTick(simulateTick(state));
-    expect(next.lastOrder?.success).toBe(false);
-    expect(next.stock).toEqual(state.stock);
-    expect(next.money).toBe(-37);
-  });
-  it("preserves food for an order expiring on the same tick", () => {
-    const state = ordered();
-    const next = simulateTick({ ...state, level: 3, consumptionIn: 1, order: { ...state.order, remaining: 1 } });
-    expect(next.lastOrder?.success).toBe(true);
-    expect(next.stock).toEqual(zeroStock());
-  });
-  it("creates reproducible orders for unlocked resources and schedules the next", () => {
-    const state = { ...emptyState(), seed: 123, orderIn: 1 };
-    const next = simulateTick(state);
-    expect(next.order).toEqual(simulateTick(state).order);
-    expect(next.order?.needs.egg).toBe(0);
-    expect(next.order?.needs.fruit).toBe(0);
-    expect(next.order?.remaining).toBeGreaterThanOrEqual(60);
-    let completed = fulfillOrder({ ...next, stock: { ...zeroStock(), wood: 100, egg: 0, fruit: 0 } });
-    const delay = completed.orderIn;
-    for (let i = 0; i < delay; i++) completed = simulateTick(completed);
-    expect(completed.order?.id).toBe(2);
-  });
-  it("migrates old saves and preserves new timers across reload", () => {
-    const old = { money: 41, level: 2, workers: emptyState().workers, stock: { ...zeroStock(), wood: 12, egg: 2, fruit: 0 }, ledger: [] };
-    const next = loadGame(JSON.stringify(old));
-    expect(next.money).toBe(41);
-    expect(next.workers).toEqual(old.workers);
-    expect(next.consumptionIn).toBe(30);
-    const saved = simulateTick({ ...next, orderIn: 1 });
-    expect(loadGame(JSON.stringify(saved)).order).toEqual(saved.order);
-    expect(loadGame("broken").workers).toHaveLength(3);
-  });
-  it("does not allow assigning locked resources or relock a region after hiring", () => {
-    const state = emptyState();
-    expect(assignJob(state, "w1", "fruit")).toBe(state);
-    expect(hireWorker({ ...state, level: 3, money: 60 }).level).toBe(3);
-  });
-});
-
-describe("expanded regions and order progression", () => {
-  it("charges exactly half once, keeps debt on reload and preserves unlocked regions", () => {
-    const base = ordered();
-    const state = { ...base, level: 6 as const, money: 2, stock: zeroStock(), order: { ...base.order, reward: 75, remaining: 1 } };
-    const failed = simulateTick(state);
-    expect(failed.money).toBe(-35.5);
-    expect(failed.lastOrder?.penalty).toBe(37.5);
-    expect(simulateTick(failed).money).toBe(-35.5);
-    const loaded = loadGame(JSON.stringify(failed));
-    expect(loaded.money).toBe(-35.5);
-    expect(loaded.level).toBe(6);
-    expect(loaded.lastOrder).toEqual(failed.lastOrder);
-  });
-  it("bounds quantity growth after success and failure and saves progression", () => {
-    const first = simulateTick({ ...emptyState(), seed: 123, level: 6 as const, orderIn: 1, orderQuantities: { ...zeroStock(), wood: 10, egg: 10, fruit: 10, stone: 10, coal: 10, iron: 10 } });
-    for (const success of [true, false]) {
-      const resolved = success
-        ? fulfillOrder({ ...first, stock: { ...first.order!.needs } })
-        : simulateTick({ ...first, order: { ...first.order!, remaining: 1 } });
-      const next = simulateTick({ ...loadGame(JSON.stringify(resolved)), orderIn: 1 });
-      for (const resource of Object.keys(first.order!.needs) as (keyof typeof first.stock)[]) {
-        if (next.order!.needs[resource] === 0) {
-          expect(next.orderQuantities[resource]).toBe(first.orderQuantities[resource]);
-          continue;
-        }
-        const growth = next.order!.needs[resource] - first.orderQuantities[resource];
-        expect(growth).toBeGreaterThanOrEqual(0);
-        expect(growth).toBeLessThanOrEqual(3);
-      }
-      expect(next.order!.reward).toBeGreaterThan(0);
-    }
-  });
-  it("produces all new resources and prevents locked assignments", () => {
-    for (const [job, level] of [["stone", 4, 2], ["coal", 5, 2.5], ["iron", 6, 3]] as const) {
-      const base = emptyState();
-      expect(assignJob(base, "w1", job)).toBe(base);
-      let state = assignJob({ ...base, level }, "w1", job);
-      for (let i = 0; i < 5; i++) state = simulateTick(state);
-      expect(state.stock[job]).toBe(1);
-      expect(state.money).toBe(0);
-    }
-    expect(simulateTick({ ...emptyState(), money: 550 }).level).toBe(6);
-  });
-  it("migrates a three-resource save including its active order", () => {
-    const old = { ...emptyState(), version: 3, orderQuantities: undefined, stock: { wood: 20, egg: 10, fruit: 3 }, order: { id: 7, needs: { wood: 20, egg: 10, fruit: 3 }, reward: 74, remaining: 10, duration: 90 } };
-    const loaded = loadGame(JSON.stringify(old));
-    expect(loaded.stock.iron).toBe(0);
-    expect(loaded.orderQuantities.wood).toBe(20);
-    expect(fulfillOrder(loaded).money).toBe(74);
-  });
-});
-
-
-it("supports 100 unique products, last-level production and bounded orders", () => {
-  const initial = emptyState();
-  expect(Object.keys(initial.stock)).toHaveLength(100);
-  expect(levelInfo[100].job).toBe("product100");
-  let state = assignJob({ ...initial, level: 100 }, "w1", "product100");
-  for (let i = 0; i < 5; i++) state = simulateTick(state);
-  expect(state.stock.product100).toBe(1);
-  expect(loadGame(JSON.stringify(state)).stock.product100).toBe(1);
-  const ordered = simulateTick({ ...state, orderIn: 1 });
-  expect(Object.values(ordered.order!.needs).filter(n => n > 0).length).toBeGreaterThanOrEqual(1);
-  expect(Object.values(ordered.order!.needs).filter(n => n > 0).length).toBeLessThanOrEqual(6);
-});
-
-
-it("randomly selects a nonempty subset of unlocked products", () => {
-  const selections = new Set<string>();
-  const counts = new Set<number>();
-  for (const level of [1, 2, 6, 100]) {
-    for (let seed = 1; seed <= 80; seed++) {
-      const state = { ...emptyState(), level, seed: seed * 7919, orderIn: 1 };
-      const next = simulateTick(state);
-      const selected = Object.entries(next.order!.needs).filter(([, n]) => n > 0).map(([r]) => r);
-      expect(selected.length).toBeGreaterThanOrEqual(1);
-      expect(selected.length).toBeLessThanOrEqual(Math.min(6, Math.max(1, level - 1)));
-      expect(selected.every(r => Array.from({ length: level }, (_, i) => levelInfo[i + 1].job).some(job => job === r))).toBe(true);
-      expect(simulateTick(state).order).toEqual(next.order);
-      if (level === 6) { selections.add(selected.join(",")); counts.add(selected.length); }
-    }
+import * as g from "./game";
+const resource = (name: string) =>
+  g.resources.find((r) => g.resourceNames[r] === name)!;
+function ready(id = "lumber", crew = 1): g.GameState {
+  let state = g.purchaseSite(
+    { ...g.emptyState(), money: 10000, orderIn: 99999, laborEventIn: 99999 },
+    id,
+  );
+  const def = g.siteDefinitions.find((s) => s.id === id)!;
+  for (let i = 0; i < crew; i++) {
+    for (const type of def.equipment) state = g.buyEquipment(state, id, type);
+    state = g.assignJob(state, state.workers[i].id, def.job);
   }
-  expect(selections.size).toBeGreaterThan(10);
-  expect(counts.size).toBe(3);
-});
-
-
-it("targets surplus and scarce stock while keeping pressure out of permanent progression", () => {
-  const hits = { wood: 0, egg: 0, fruit: 0 };
-  for (let seed = 1; seed <= 600; seed++) {
-    const state = { ...emptyState(), level: 3, seed: seed * 7919, orderIn: 1,
-      stock: { ...zeroStock(), wood: 100, egg: 40, fruit: 0 } };
-    const next = simulateTick(state);
-    for (const resource of ["wood", "egg", "fruit"] as const) {
-      const quantity = next.order!.needs[resource];
-      if (!quantity) continue;
-      hits[resource]++;
-      if (resource === "wood") {
-        expect(quantity).toBe(60);
-        expect(next.orderQuantities.wood).toBeLessThanOrEqual(24);
-      } else if (resource === "fruit") {
-        expect(quantity - next.orderQuantities.fruit).toBeGreaterThanOrEqual(2);
-        expect(quantity - next.orderQuantities.fruit).toBeLessThanOrEqual(4);
-      } else expect(quantity).toBe(next.orderQuantities.egg);
-    }
-    expect(loadGame(JSON.stringify(next)).order).toEqual(next.order);
-    expect(simulateTick(state).order).toEqual(next.order);
-  }
-  expect(hits.wood).toBeGreaterThan(hits.fruit);
-  expect(hits.fruit).toBeGreaterThan(hits.egg);
-});
-
-
-describe("labor events", () => {
-  const event = (strike: boolean) => {
-    for (let seed = 1; seed < 1000; seed++) {
-      const base = emptyState();
-      const state = simulateTick({ ...base, seed, laborEventIn: 1, orderIn: 9999,
-        workers: base.workers.map(w => ({ ...w, job: "wood" as const })) });
-      if (strike ? state.workers.some(w => w.strikeRemaining) : state.workers.length < 3) return state;
-    }
-    throw new Error("Expected event not found");
-  };
-  it("removes resigning employees, reports the site and charges for replacements", () => {
-    const state = event(false);
-    expect(state.workers.length).toBeGreaterThanOrEqual(1);
-    expect(state.workers.length).toBeLessThan(3);
-    expect(state.laborNotices[0].text).toContain("Kayıp Orman");
-    expect(state.laborNotices[0].text).toContain("istifa etti");
-    expect(state.laborEventIn).toBeGreaterThanOrEqual(240);
-    expect(state.laborEventIn).toBeLessThanOrEqual(480);
-    expect(hireForJob(state, "wood")).toBe(state);
-    const funded = { ...state, money: 100 };
-    const hired = hireForJob(funded, "wood");
-    expect(hired.money).toBe(100 - hiringCost(funded));
-    expect(hired.workers).toHaveLength(state.workers.length + 1);
-    expect(hired.workers[hired.workers.length - 1]?.job).toBe("wood");
-    expect(new Set(hired.workers.map(w => w.id)).size).toBe(hired.workers.length);
-    expect(loadGame(JSON.stringify(state)).workers).toEqual(state.workers);
+  return state;
+}
+const ticks = (state: g.GameState, count = 5) => {
+  for (let i = 0; i < count; i++) state = g.simulateTick(state);
+  return state;
+};
+describe("categories and purchases", () => {
+  it("starts with capital and no free sites or automatic unlocks", () => {
+    const state = g.emptyState();
+    expect(state.money).toBe(250);
+    expect(state.sites).toEqual({});
+    expect(g.simulateTick({ ...state, money: 1000000 }).sites).toEqual({});
+    expect(ticks(state, 20).order).toBeNull();
+    expect(g.assignJob(state, "w1", "wood")).toBe(state);
   });
-  it("pauses strikers for 600 ticks, prevents reassignment and lets paid replacements work", () => {
-    const state = event(true);
-    expect(state.workers.every(w => w.strikeRemaining === 600)).toBe(true);
-    expect(state.laborNotices[0].text).toContain("10 dakikalık greve");
-    expect(assignJob(state, state.workers[0].id, "idle")).toBe(state);
-    expect(changeWorkers(state, "wood", -1)).toBe(state);
-    const hired = hireForJob({ ...state, shelterCapacity: 6, money: 100 }, "wood");
-    let next = { ...hired, warehouseCapacity: { ...hired.warehouseCapacity, wood: 1000 }, laborEventIn: 9999, consumptionIn: 9999, orderIn: 9999 };
-    for (let i = 0; i < 5; i++) next = simulateTick(next);
+  it("has the requested sites and categories", () => {
+    expect(g.categories.map((c) => c.name)).toEqual([
+      "Orman",
+      "Tarım",
+      "Hayvancılık",
+      "Maden",
+    ]);
+    expect(g.siteDefinitions.map((s) => s.name)).toEqual(
+      expect.arrayContaining([
+        "Oduncu",
+        "Avcı",
+        "Tarla",
+        "Bahçe",
+        "İnek Ahırı",
+        "Kümes",
+        "Koyun Ağılı",
+        "Kömür Madeni",
+        "Bakır Madeni",
+        "Kil Madeni",
+        "Kum Madeni",
+        "Altın Madeni",
+        "Gümüş Madeni",
+      ]),
+    );
+  });
+  it("deducts money and doubles price globally, rejecting repeat or unaffordable purchases", () => {
+    let state = { ...g.emptyState(), money: 700 };
+    for (const [id, cost] of [
+      ["coop", 100],
+      ["lumber", 200],
+      ["field", 400],
+    ] as const) {
+      expect(g.sitePurchaseCost(state)).toBe(cost);
+      const before = state.money;
+      state = g.purchaseSite(state, id);
+      expect(state.money).toBe(before - cost);
+      expect(g.purchaseSite(state, id)).toBe(state);
+    }
+    expect(g.sitePurchaseCost(state)).toBe(800);
+    expect(g.purchaseSite(state, "barn")).toBe(state);
+    expect(g.purchaseSite(state, "invalid")).toBe(state);
+  });
+});
+describe("equipment and workers", () => {
+  it("groups matching levels and displayed durability without mixing sites or types", () => {
+    const item = ready().equipment[0];
+    const items = [
+      item,
+      { ...item, id: 10, durability: 99.5 },
+      { ...item, id: 11, durability: 99 },
+      { ...item, id: 12, level: 2 },
+      { ...item, id: 13, siteId: "hunter" },
+      { ...item, id: 14, type: "gloves" as const },
+    ];
+    const groups = g.groupEquipment(items);
+    expect(groups).toHaveLength(5);
+    expect(groups.find((group) => group.includes(item))).toHaveLength(2);
+  });
+  it("upgrades only affordable group members once and restores their durability", () => {
+    let state = ready();
+    for (let i = 0; i < 4; i++) state = g.buyEquipment(state, "lumber", "axe");
+    state = {
+      ...state,
+      equipment: state.equipment.map((e) => ({ ...e, durability: 50 })),
+    };
+    const ids = state.equipment
+      .filter((e) => e.type === "axe")
+      .map((e) => e.id);
+    const cost = g.equipmentTypes.axe.price;
+    state = { ...state, money: cost * 4 + cost / 2 };
+    const next = g.upgradeEquipmentGroup(state, [...ids, ids[0]]);
+    expect(next.money).toBe(cost / 2);
+    expect(next.equipment.filter((e) => e.level === 2)).toHaveLength(4);
+    expect(
+      next.equipment
+        .filter((e) => e.level === 2)
+        .every((e) => e.durability === 100),
+    ).toBe(true);
+    expect(next.equipment.find((e) => e.id === ids[4])).toMatchObject({
+      level: 1,
+      durability: 50,
+    });
+    expect(next.equipment.find((e) => e.type === "gloves")).toMatchObject({
+      level: 1,
+      durability: 50,
+    });
+    expect(g.upgradeEquipmentGroup(next, [ids[4]])).toBe(next);
+    const all = g.upgradeEquipmentGroup({ ...state, money: cost * 5 }, ids);
+    expect(all.money).toBe(0);
+    expect(all.equipment.filter((e) => e.level === 2)).toHaveLength(5);
+    expect(state.equipment.every((e) => e.level === 1)).toBe(true);
+  });
+  it("assigns workers before equipment arrives and waits for a complete kit to produce", () => {
+    let state = g.purchaseSite(g.emptyState(), "lumber");
+    state = g.changeWorkers(state, "wood", 1);
+    expect(state.workers[0].job).toBe("wood");
+    expect(ticks(state).stock.wood).toBe(0);
+    state = g.buyEquipment(state, "lumber", "axe");
+    expect(ticks(state).stock.wood).toBe(0);
+    state = g.buyEquipment(state, "lumber", "gloves");
+    expect(ticks(state).stock.wood).toBe(1);
+    state = g.changeWorkers(state, "wood", 1);
+    expect(state.workers.filter((w) => w.job === "wood")).toHaveLength(2);
+    expect(g.managerRequests(state, "forest").map((r) => r.count)).toEqual([
+      1, 1,
+    ]);
+    expect(ticks(state).stock.wood).toBe(1);
+    const full = ready("lumber", 3);
+    expect(g.canAssign(full, "wood")).toBe(false);
+    expect(g.changeWorkers(full, "wood", 1)).toBe(full);
+  });
+  it("produces stock, never money, and wears only used equipment", () => {
+    let state = ready();
+    state = g.buyEquipment(state, "lumber", "axe");
+    const next = ticks(state);
     expect(next.stock.wood).toBe(1);
-    expect(next.workers[0].strikeRemaining).toBe(595);
-    const loaded = loadGame(JSON.stringify(next));
-    expect(loaded.laborNotices).toEqual(next.laborNotices);
-    expect(loaded.workers[0].strikeRemaining).toBe(595);
-    expect(loaded.laborEventIn).toBe(next.laborEventIn);
-    for (let i = 0; i < 595; i++) next = simulateTick(next);
-    expect(next.workers.every(w => !w.strikeRemaining)).toBe(true);
-    expect(next.laborNotices[0].text).toContain("grev bitti");
-    expect(next.workers[0].progress).toBe(state.workers[0].progress);
-    expect(simulateTick(next).workers[0].progress).toBe(state.workers[0].progress + 20);
+    expect(next.money).toBe(state.money);
+    expect(next.equipment.map((e) => e.durability)).toEqual([99, 99, 100]);
+    expect(state.equipment.every((e) => e.durability === 100)).toBe(true);
   });
-  it("migrates saves without labor data and avoids events at empty sites", () => {
-    const base = emptyState();
-    const loaded = loadGame(JSON.stringify({ ...base, laborEventIn: undefined, laborSequence: undefined, laborNotices: undefined }));
-    expect(loaded.laborNotices).toEqual([]);
-    expect(loaded.laborEventIn).toBeGreaterThanOrEqual(240);
-    const next = simulateTick({ ...loaded, laborEventIn: 1 });
-    expect(next.workers).toEqual(base.workers);
-    expect(next.laborNotices).toEqual([]);
+  it("stops after a tool breaks, asks for replacements and resumes with a new tool", () => {
+    let state = ready();
+    state = {
+      ...state,
+      equipment: state.equipment.map((e) => ({
+        ...e,
+        durability: e.type === "axe" ? 1 : 100,
+      })),
+    };
+    const brokenId = state.equipment.find((e) => e.type === "axe")!.id;
+    state = ticks(state, 10);
+    expect(state.stock.wood).toBe(1);
+    expect(g.managerRequests(state, "forest")[0].type).toBe("axe");
+    expect(state.equipment.some((e) => e.id === brokenId)).toBe(false);
+    expect(state.equipment).toHaveLength(1);
+    expect(state.equipment[0]).toMatchObject({
+      type: "gloves",
+      durability: 99,
+    });
+    expect(g.upgradeEquipment(state, brokenId)).toBe(state);
+    expect(ticks(g.buyEquipment(state, "lumber", "axe")).stock.wood).toBe(2);
+  });
+  it("charges for upgrades and restores durability only before breakage", () => {
+    const state = ticks(ready());
+    const item = state.equipment[0];
+    const next = g.upgradeEquipment(state, item.id);
+    expect(next.equipment[0]).toMatchObject({ level: 2, durability: 100 });
+    expect(next.money).toBe(state.money - g.equipmentUpgradeCost(item));
+    expect(
+      g.upgradeEquipment({ ...state, money: 0 }, item.id).equipment,
+    ).toEqual(state.equipment);
+    expect(g.buyEquipment(state, "lumber", "helmet")).toBe(state);
+  });
+  it("improves speed and wear with an upgraded complete set", () => {
+    let state = ready();
+    for (const item of state.equipment)
+      state = g.upgradeEquipment(state, item.id);
+    const next = ticks(state, 4);
+    expect(next.stock.wood).toBe(1);
+    expect(next.equipment[0].durability).toBe(99.5);
+  });
+  it("does not share one kit among multiple workers in the same tick", () => {
+    let state = ready("lumber", 2);
+    state = { ...state, equipment: state.equipment.slice(0, 2) };
+    expect(ticks(state).stock.wood).toBe(1);
+  });
+  it("hires directly to an unequipped site and charges the hiring cost", () => {
+    let state = g.buildShelter(
+      g.purchaseSite({ ...g.emptyState(), money: 1000 }, "lumber"),
+    );
+    state = g.upgradeSite(state, "lumber");
+    for (const worker of state.workers)
+      state = g.assignJob(state, worker.id, "wood");
+    const next = g.hireForJob(state, "wood");
+    expect(next.workers).toHaveLength(state.workers.length + 1);
+    expect(next.workers[next.workers.length - 1].job).toBe("wood");
+    expect(next.money).toBe(state.money - g.hiringCost(state));
+    expect(ticks(next).stock.wood).toBe(0);
+  });
+});
+describe("site and warehouse limits", () => {
+  it("stops exactly at the finite reserve with simultaneous workers; upgrade replenishes", () => {
+    let state = ready("lumber", 3);
+    state = {
+      ...state,
+      sites: { lumber: { ...state.sites.lumber, extracted: 99 } },
+    };
+    state = ticks(state);
+    expect(state.stock.wood).toBe(1);
+    expect(state.sites.lumber.extracted).toBe(100);
+    expect(ticks(state).stock.wood).toBe(1);
+    const next = g.upgradeSite(state, "lumber");
+    expect(next.money).toBe(state.money - 50);
+    expect(g.workerCapacity(next.sites.lumber)).toBe(6);
+    expect(g.productionCapacity(next.sites.lumber)).toBe(200);
+    expect(next.sites.lumber.extracted).toBe(0);
+    expect(ticks(next).stock.wood).toBeGreaterThan(1);
+  });
+  it("caps warehouse with concurrent production and resumes after a paid upgrade", () => {
+    let state = ready("coop", 3);
+    state = { ...state, stock: { ...state.stock, egg: 99 } };
+    state = ticks(state, 10);
+    expect(state.stock.egg).toBe(100);
+    expect(
+      g.productionStatus(
+        state,
+        g.siteDefinitions.find((s) => s.id === "coop")!,
+      ),
+    ).toBe("Depo dolu");
+    const upgraded = g.upgradeWarehouse(state, "egg");
+    expect(upgraded.money).toBe(state.money - 100);
+    expect(upgraded.warehouseCapacity.egg).toBe(200);
+    expect(ticks(upgraded).stock.egg).toBeGreaterThan(100);
+    expect(upgraded.sites.coop.extracted).toBe(0);
+  });
+  it("rejects warehouse and site upgrades for unowned or unaffordable sites", () => {
+    const state = { ...ready(), money: 0 };
+    expect(g.upgradeSite(state, "lumber")).toBe(state);
+    expect(g.upgradeWarehouse(state, "wood")).toBe(state);
+    expect(
+      g.upgradeWarehouse(g.emptyState(), "egg").warehouseCapacity.egg,
+    ).toBe(100);
+  });
+});
+describe("requested production", () => {
+  it("produces milk continuously without instructions", () => {
+    const state = ready("barn");
+    const next = ticks(state, 20);
+    expect(next.stock[resource("Süt")]).toBe(4);
+    expect(next.stock[resource("Kaymak")]).toBe(0);
+    expect(next.sites.barn.queue).toEqual([]);
+  });
+  it("processes every requested product concurrently with exact ingredients", () => {
+    let state = ready("barn");
+    const milk = resource("Süt"),
+      cream = resource("Kaymak"),
+      butter = resource("Tereyağı"),
+      cheese = resource("Peynir");
+    state = { ...state, stock: { ...state.stock, [milk]: 20, [butter]: 1 } };
+    for (const [r, qty] of [
+      [cream, 1],
+      [butter, 1],
+      [cheese, 1],
+    ] as const)
+      state = g.requestProduction(state, "barn", r, qty);
+    const partial = ticks(state, 2);
+    for (const r of [milk, cream, butter, cheese])
+      expect(partial.sites.barn.productProgress?.[r]).toBe(40);
+    const next = ticks(partial, 3);
+    expect(next.stock[milk]).toBe(14);
+    expect(next.stock[cream]).toBe(1);
+    expect(next.stock[butter]).toBe(1);
+    expect(next.stock[cheese]).toBe(1);
+    expect(next.sites.barn.queue).toEqual([]);
+    expect(next.money).toBe(state.money);
+  });
+  it("only blocks the product missing ingredients, while automatic production continues", () => {
+    let state = g.requestProduction(
+      ready("barn"),
+      "barn",
+      resource("Peynir"),
+      1,
+    );
+    const next = ticks(state, 10);
+    expect(next.stock[resource("Süt")]).toBe(2);
+    expect(next.stock[resource("Peynir")]).toBe(0);
+    expect(next.equipment[0].durability).toBe(98);
+    expect(
+      g.productProductionStatus(
+        next,
+        g.siteDefinitions.find((s) => s.id === "barn")!,
+        g.siteDefinitions
+          .find((s) => s.id === "barn")!
+          .recipes.find((r) => r.output === resource("Peynir"))!,
+      ),
+    ).toBe("Hammadde bekliyor");
+    state = g.cancelProduction(next, "barn", 0);
+    expect(state.sites.barn.queue).toEqual([]);
+  });
+  it("produces wool, sheep milk and sheep cheese", () => {
+    let state = ready("sheep");
+    for (const [name, qty] of [
+      ["Yün", 1],
+      ["Koyun sütü", 2],
+      ["Koyun peyniri", 1],
+    ] as const)
+      state = g.requestProduction(state, "sheep", resource(name), qty);
+    const next = ticks(state, 20);
+    expect(next.stock[resource("Yün")]).toBe(4);
+    expect(next.stock[resource("Koyun sütü")]).toBe(2);
+    expect(next.stock[resource("Koyun peyniri")]).toBe(1);
+  });
+  it("rejects invalid recipes, quantities, excessive queues and prevents ingredient overdraft", () => {
+    let state = ready("barn", 3);
+    for (const n of [0, -1, 0.5, NaN, 101])
+      expect(g.requestProduction(state, "barn", resource("Kaymak"), n)).toBe(
+        state,
+      );
+    expect(g.requestProduction(state, "barn", "wood")).toBe(state);
+    state = { ...state, stock: { ...state.stock, [resource("Süt")]: 2 } };
+    state = g.requestProduction(state, "barn", resource("Kaymak"), 3);
+    const next = ticks(state, 2);
+    expect(next.stock[resource("Kaymak")]).toBe(1);
+    expect(next.stock[resource("Süt")]).toBe(1);
+    expect(next.sites.barn.queue[0].remaining).toBe(2);
+  });
+  it("does not consume ingredients when the output depot is full", () => {
+    const base = g.requestProduction(
+      ready("barn"),
+      "barn",
+      resource("Kaymak"),
+      1,
+    );
+    const state = {
+      ...base,
+      stock: { ...base.stock, [resource("Kaymak")]: 100, [resource("Süt")]: 2 },
+    };
+    const next = ticks(state);
+    expect(next.stock[resource("Kaymak")]).toBe(100);
+    expect(next.stock[resource("Süt")]).toBe(3);
+    expect(g.productionRemaining(next.sites.barn, resource("Kaymak"))).toBe(1);
+  });
+});
+describe("economy, clock and labor regression", () => {
+  it("creates reproducible orders only for purchased sites and never unlocks on delivery", () => {
+    const state = { ...ready("coop"), orderIn: 1, seed: 123 };
+    const next = g.simulateTick(state);
+    expect(next.order).toEqual(g.simulateTick(state).order);
+    expect(g.resources.filter((r) => next.order!.needs[r] > 0)).toEqual([
+      "egg",
+    ]);
+    const filled = { ...next, stock: { ...next.stock, egg: 100 } };
+    const delivered = g.fulfillOrder(filled);
+    expect(delivered.money).toBe(filled.money + filled.order!.reward);
+    expect(delivered.sites).toEqual(filled.sites);
+    expect(g.fulfillOrder(delivered)).toBe(delivered);
+  });
+  it.each([true, false])(
+    "settles orders exactly once at deadline (enough stock %s)",
+    (enough) => {
+      const state = {
+        ...ready(),
+        stock: { ...g.zeroStock(), wood: enough ? 10 : 0 },
+        order: {
+          id: 1,
+          needs: { ...g.zeroStock(), wood: 10 },
+          reward: 20,
+          remaining: 1,
+          duration: 60,
+        },
+      };
+      const next = g.simulateTick(state);
+      expect(next.money).toBe(state.money + (enough ? 20 : -10));
+      expect(next.order).toBeNull();
+      expect(g.fulfillOrder(next)).toBe(next);
+    },
+  );
+  it("preserves pause and working hour boundaries", () => {
+    const state = ready();
+    const paused = { ...state, paused: true };
+    expect(g.simulateTick(paused)).toBe(paused);
+    expect(
+      g.simulateTick({ ...state, minuteOfDay: 479 }).workers[0].progress,
+    ).toBe(0);
+    expect(
+      g.simulateTick({ ...state, minuteOfDay: 480 }).workers[0].progress,
+    ).toBe(20);
+    expect(
+      g.simulateTick({ ...state, minuteOfDay: 1199 }).workers[0].progress,
+    ).toBe(20);
+    expect(
+      g.simulateTick({ ...state, minuteOfDay: 1200 }).workers[0].progress,
+    ).toBe(0);
+  });
+  it("charges daily wages once at midnight and when skipping from evening", () => {
+    const state = ready();
+    expect(g.dailyWagePerWorker(state)).toBe(2.5);
+    expect(g.dailyPayroll(state)).toBe(7.5);
+    const next = g.simulateTick({ ...state, minuteOfDay: 1439 });
+    expect(next.money).toBe(state.money - g.dailyPayroll(state));
+    expect(next.day).toBe(2);
+    const morning = g.skipToMorning({ ...state, minuteOfDay: 1200 });
+    expect(morning.money).toBe(next.money);
+    expect(morning.minuteOfDay).toBe(480);
+    expect(g.skipToMorning(morning)).toBe(morning);
+    expect(g.skipToMorning({ ...next, minuteOfDay: 1 }).money).toBe(next.money);
+  });
+  it("charges for hires, respects housing and allows shelter expansion", () => {
+    let state = ready();
+    const before = state.money;
+    state = g.hireWorker(state);
+    expect(state.money).toBe(before - 25);
+    expect(g.isHoused(state, state.workers[3].id)).toBe(false);
+    expect(g.assignJob(state, state.workers[3].id, "wood")).toBe(state);
+    const sheltered = g.buildShelter(state);
+    expect(sheltered.money).toBe(state.money - 30);
+    expect(g.isHoused(sheltered, sheltered.workers[3].id)).toBe(true);
+    const poor = { ...state, money: 0 };
+    expect(g.hireWorker(poor)).toBe(poor);
+  });
+  it("stops strikers and resumes when their strike ends", () => {
+    const state = ready();
+    const striking = {
+      ...state,
+      workers: state.workers.map((w) => ({ ...w, strikeRemaining: 5 })),
+    };
+    expect(ticks(striking).stock.wood).toBe(0);
+    const resumed = ticks(striking, 10);
+    expect(resumed.stock.wood).toBe(1);
+    expect(resumed.laborNotices.length).toBeGreaterThan(0);
+  });
+});
+describe("save migration", () => {
+  it("round-trips all site, equipment, queue, clock and storage state", () => {
+    let state = g.requestProduction(ready("barn"), "barn", resource("Süt"), 10);
+    state = ticks(g.upgradeSite(state, "barn"));
+    state = g.upgradeWarehouse(state, resource("Süt"));
+    const saved = g.loadGame(JSON.stringify(state));
+    expect(saved.sites).toEqual(state.sites);
+    expect(saved.equipment).toEqual(state.equipment);
+    expect(saved.workers).toEqual(state.workers);
+    expect(saved.stock).toEqual(state.stock);
+    expect(saved.money).toBe(state.money);
+    expect(saved.warehouseCapacity).toEqual(state.warehouseCapacity);
+  });
+  it("migrates old sites with equipment while preserving money, inventory and workers", () => {
+    const base = g.emptyState();
+    const saved = g.loadGame(
+      JSON.stringify({
+        ...base,
+        version: 11,
+        level: 5,
+        money: 42,
+        stock: { wood: 25 },
+        workers: base.workers.map((w) => ({ ...w, job: "wood" })),
+      }),
+    );
+    expect(saved.money).toBe(42);
+    expect(saved.stock.wood).toBe(25);
+    expect(saved.sites.lumber).toBeDefined();
+    expect(saved.sites.coop).toBeDefined();
+    expect(g.equippedCapacity(saved, g.siteDefinitions[0])).toBe(3);
+    expect(
+      ticks({ ...saved, orderIn: 9999, laborEventIn: 9999 }).stock.wood,
+    ).toBe(28);
+  });
+  it("filters malformed site and equipment data, falls back for corrupt JSON", () => {
+    const base = ready();
+    const saved = g.loadGame(
+      JSON.stringify({
+        ...base,
+        sites: { lumber: { level: -1, queue: [] } },
+        equipment: [
+          { id: 1, siteId: "unknown", type: "axe", level: 1, durability: 100 },
+        ],
+      }),
+    );
+    expect(saved.sites).toEqual({});
+    expect(saved.equipment).toEqual([]);
+    expect(saved.workers.every((w) => w.job === "idle")).toBe(true);
+    expect(g.loadGame("broken").money).toBe(250);
   });
 });
 
-
-it("never consumes any food category", () => {
-  for (const resource of foodResources) {
-    let state = { ...emptyState(), level: 100, orderIn: 9999, laborEventIn: 9999,
-      stock: { ...zeroStock(), wood: 50, iron: 50, [resource]: 3 } };
-    const stock = state.stock;
-    for (let tick = 0; tick < 60; tick++) state = simulateTick(state);
-    expect(state.stock).toEqual(stock);
-  }
-});
-
-describe("warehouse capacity", () => {
-  it("caps simultaneous production and resumes after an upgrade", () => {
-    const base = emptyState();
-    const state = { ...base, money: 100, stock: { ...base.stock, wood: 99 },
-      workers: base.workers.map(w => ({ ...w, job: "wood" as const, progress: 80 })) };
-    const full = simulateTick(state);
-    expect(full.stock.wood).toBe(100);
-    expect(full.money).toBe(100);
-    const paused = simulateTick(full);
-    expect(paused.stock.wood).toBe(100);
-    expect(paused.money).toBe(100);
-    const upgraded = upgradeWarehouse(paused, "wood");
-    expect(upgraded.money).toBe(0);
-    expect(upgraded.warehouseCapacity.wood).toBe(200);
-    expect(upgraded.warehouseCapacity.egg).toBe(100);
-    expect(warehouseUpgradeCost(upgraded, "wood")).toBe(200);
-    expect(simulateTick(upgraded).stock.wood).toBe(102);
-    expect(upgradeWarehouse(upgraded, "wood")).toBe(upgraded);
-    expect(upgradeWarehouse({ ...base, money: 1000 }, "egg")).toEqual({ ...base, money: 1000 });
+describe("independent production lines", () => {
+  it("a missing ingredient on the first request never blocks later products", () => {
+    let state = ready("barn");
+    state = { ...state, stock: { ...state.stock, [resource("Süt")]: 20 } };
+    state = g.requestProduction(state, "barn", resource("Peynir"), 5);
+    state = g.requestProduction(state, "barn", resource("Kaymak"), 1);
+    const next = ticks(state);
+    expect(next.stock[resource("Peynir")]).toBe(0);
+    expect(next.stock[resource("Kaymak")]).toBe(1);
+    expect(g.productionRemaining(next.sites.barn, resource("Peynir"))).toBe(5);
   });
-  it("sorts by fill ratio and preserves upgrades and legacy stock", () => {
-    const base = emptyState();
-    expect(Object.values(base.warehouseCapacity)).toEqual(Array(100).fill(100));
-    const state = { ...base, level: 3, stock: { ...base.stock, wood: 150, egg: 90, fruit: 100 },
-      warehouseCapacity: { ...base.warehouseCapacity, wood: 200 } };
-    expect(warehouseResources(state)).toEqual(["fruit", "egg", "wood"]);
-    expect(loadGame(JSON.stringify(state)).warehouseCapacity).toEqual(state.warehouseCapacity);
-    const legacy = loadGame(JSON.stringify({ ...state, warehouseCapacity: undefined }));
-    expect(legacy.stock.wood).toBe(150);
-    expect(legacy.warehouseCapacity.wood).toBe(100);
-    expect(loadGame(JSON.stringify({ ...state, warehouseCapacity: { wood: -10, egg: null } })).warehouseCapacity.wood).toBe(100);
+  it("reduces targets, calculates shortage from inventory and rejects invalid changes", () => {
+    let state = ready("barn");
+    const cheese = resource("Peynir");
+    const recipe = g.siteDefinitions
+      .find((s) => s.id === "barn")!
+      .recipes.find((r) => r.output === cheese)!;
+    state = { ...state, stock: { ...state.stock, [resource("Süt")]: 10 } };
+    state = g.adjustProduction(state, "barn", cheese, 10);
+    expect(g.productionShortages(state, recipe, 10)).toEqual([
+      { resource: resource("Süt"), missing: 10 },
+      { resource: resource("Tereyağı"), missing: 10 },
+    ]);
+    state = g.adjustProduction(state, "barn", cheese, -10);
+    expect(g.productionRemaining(state.sites.barn, cheese)).toBe(0);
+    expect(g.adjustProduction(state, "barn", cheese, -1)).toBe(state);
+    expect(g.adjustProduction(state, "barn", cheese, 101)).toBe(state);
+    expect(g.adjustProduction(state, "barn", cheese, NaN)).toBe(state);
+    expect(g.requestProduction(state, "barn", resource("Süt"))).toBe(state);
   });
-});
-
-
-describe("worker housing", () => {
-  it("blocks unhoused assignments and production until shelter is built", () => {
-    const base = { ...emptyState(), money: 100 };
-    const hired = hireWorker(base);
-    const id = hired.workers[3].id;
-    expect(isHoused(hired, id)).toBe(false);
-    expect(assignJob(hired, id, "wood")).toBe(hired);
-    expect(hireForJob(base, "wood")).toBe(base);
-    const assigned = { ...hired, workers: hired.workers.map(w => w.id === id ? { ...w, job: "wood" as const, progress: 80 } : w) };
-    const paused = simulateTick(assigned);
-    expect(paused.stock.wood).toBe(0);
-    expect(paused.money).toBe(hired.money);
-    expect(paused.workers[3].progress).toBe(80);
-    const housed = buildShelter(paused);
-    expect(housed.shelterCapacity).toBe(6);
-    expect(housed.money).toBe(paused.money - 30);
-    expect(shelterCost(housed)).toBe(60);
-    expect(simulateTick(housed).stock.wood).toBe(1);
-    expect(assignJob(buildShelter(hired), id, "wood").workers[3].job).toBe("wood");
-    expect(buildShelter(emptyState()).shelterCapacity).toBe(3);
+  it("preserves partial progress through pause and save, and resets it when cancelled", () => {
+    let state = ready("barn");
+    const cream = resource("Kaymak");
+    state = { ...state, stock: { ...state.stock, [resource("Süt")]: 20 } };
+    state = ticks(g.requestProduction(state, "barn", cream, 2), 2);
+    expect(state.sites.barn.productProgress?.[cream]).toBe(40);
+    const loaded = g.loadGame(JSON.stringify(state));
+    expect(loaded.sites.barn.productProgress).toEqual(
+      state.sites.barn.productProgress,
+    );
+    expect(
+      ticks({ ...loaded, paused: true }).sites.barn.productProgress?.[cream],
+    ).toBe(40);
+    expect(
+      g.adjustProduction(loaded, "barn", cream, -2).sites.barn
+        .productProgress?.[cream],
+    ).toBe(0);
+    expect(ticks(loaded, 3).stock[cream]).toBe(1);
   });
-  it("keeps beds occupied during strikes, reuses vacated beds and migrates saves", () => {
-    const hired = hireWorker({ ...emptyState(), money: 25 });
-    const strike = { ...hired, workers: hired.workers.map(w => ({ ...w, strikeRemaining: 600 })) };
-    expect(isHoused(strike, strike.workers[3].id)).toBe(false);
-    expect(isHoused({ ...hired, workers: hired.workers.slice(1) }, hired.workers[3].id)).toBe(true);
-    expect(loadGame(JSON.stringify(hired)).shelterCapacity).toBe(3);
-    const legacy = loadGame(JSON.stringify({ ...hired, shelterCapacity: undefined }));
-    expect(legacy.shelterCapacity).toBe(6);
-    expect(legacy.workers).toEqual(hired.workers);
-    expect(loadGame(JSON.stringify({ ...hired, shelterCapacity: -1 })).shelterCapacity).toBe(3);
+  it("full raw storage does not block processing and shared ingredients never go negative", () => {
+    let state = ready("barn", 3);
+    const milk = resource("Süt"),
+      cream = resource("Kaymak"),
+      butter = resource("Tereyağı");
+    state = { ...state, stock: { ...state.stock, [milk]: 100 } };
+    state = g.requestProduction(state, "barn", cream, 100);
+    const next = ticks(state, 20);
+    expect(next.stock[cream]).toBeGreaterThan(0);
+    expect(next.stock[milk]).toBeGreaterThanOrEqual(0);
+    let scarce = {
+      ...ready("barn", 3),
+      stock: { ...g.zeroStock(), [milk]: 3 },
+    };
+    scarce = g.requestProduction(scarce, "barn", butter, 10);
+    scarce = g.requestProduction(scarce, "barn", cream, 10);
+    const produced = ticks(scarce, 20);
+    expect(Object.values(produced.stock).every((n) => n >= 0)).toBe(true);
+    expect(
+      produced.stock[milk] +
+        produced.stock[cream] * 2 +
+        produced.stock[butter] * 3,
+    ).toBe(15);
   });
-});
-
-
-describe("order-only income and balance", () => {
-  it("starts from zero cash and earns the first unlock solely through an order", () => {
-    for (let seed = 1; seed <= 40; seed++) {
-      let state = emptyState();
-      state = { ...state, seed, workers: state.workers.map(w => ({ ...w, job: "wood" as const })) };
-      for (let i = 0; i < 14; i++) state = simulateTick(state);
-      expect(state.order).toBeNull();
-      expect(state.money).toBe(0);
-      state = simulateTick(state);
-      expect(state.order).not.toBeNull();
-      while (state.stock.wood < state.order!.needs.wood) state = simulateTick(state);
-      expect(state.money).toBe(0);
-      const delivered = fulfillOrder(state);
-      expect(delivered.money).toBe(state.order!.reward);
-      expect(delivered.level).toBeGreaterThanOrEqual(2);
-      expect(delivered.orderIn).toBeGreaterThanOrEqual(15);
-      expect(delivered.orderIn).toBeLessThanOrEqual(25);
-    }
-  });
-  it("stops only full products, resumes after delivery and never pays for production", () => {
-    const base = emptyState();
-    let state: ReturnType<typeof emptyState> = { ...base, level: 2, consumptionIn: 9999, laborEventIn: 9999, orderIn: 9999,
-      stock: { ...base.stock, wood: 100 }, workers: base.workers.map((w, i) => ({ ...w, job: i === 0 ? "wood" as const : "egg" as const, progress: 80 })) };
-    state = simulateTick(state);
-    expect(state.money).toBe(0);
-    expect(state.stock.wood).toBe(100);
-    expect(state.stock.egg).toBe(2);
-    expect(state.workers[0].progress).toBe(80);
-    const delivered = fulfillOrder({ ...state, order: { id: 1, needs: { ...zeroStock(), wood: 10 }, reward: 20, duration: 60, remaining: 60 } });
-    expect(delivered.stock.wood).toBe(90);
-    const resumed = simulateTick(delivered);
-    expect(resumed.stock.wood).toBe(91);
-    expect(resumed.money).toBe(20);
-  });
-  it("bounds late-game orders by crew and storage even with legacy oversized quantities", () => {
-    for (const level of [1, 6, 100]) {
-      for (let seed = 1; seed <= 40; seed++) {
-        const base = emptyState();
-        const state = simulateTick({ ...base, level, seed: seed * 7919, orderIn: 1, orderSequence: 10000,
-          orderQuantities: { ...zeroStock(), ...Object.fromEntries(Object.keys(base.stock).map(r => [r, 10000])) },
-          stock: { ...zeroStock(), ...Object.fromEntries(Object.keys(base.stock).map(r => [r, 1000])) } });
-        const requested = Object.values(state.order!.needs).filter(n => n > 0);
-        expect(requested.length).toBeLessThanOrEqual(3);
-        expect(Math.max(...requested)).toBeLessThanOrEqual(100);
-        expect(state.order!.duration).toBeLessThanOrEqual(240);
-        expect(Math.max(...Object.values(state.orderQuantities).filter(n => n < 10000))).toBeLessThanOrEqual(24);
-      }
-    }
-  });
-  it("preserves legacy cash and active contracts while shortening the next wait", () => {
-    const base = ordered();
-    const loaded = loadGame(JSON.stringify({ ...base, version: 8, money: 123, orderIn: 75 }));
-    expect(loaded.money).toBe(123);
-    expect(loaded.stock).toEqual(base.stock);
-    expect(loaded.order).toEqual(base.order);
-    expect(loaded.orderIn).toBe(25);
-    expect(loadGame(JSON.stringify({ ...loaded, orderIn: 17 })).orderIn).toBe(17);
+  it("migrates automatic requests away while keeping processed targets", () => {
+    const state = ready("barn");
+    const loaded = g.loadGame(
+      JSON.stringify({
+        ...state,
+        sites: {
+          barn: {
+            ...state.sites.barn,
+            queue: [
+              { output: resource("Süt"), remaining: 5 },
+              { output: resource("Kaymak"), remaining: 3 },
+            ],
+          },
+        },
+      }),
+    );
+    expect(loaded.sites.barn.queue).toEqual([
+      { output: resource("Kaymak"), remaining: 3 },
+    ]);
   });
 });
 
-
-it("sustains repeated order income with the starter crew", () => {
-  for (let seed = 1; seed <= 10; seed++) {
-    let state = { ...emptyState(), seed: seed * 7919, laborEventIn: 9999 };
-    let delivered = 0;
-    let earned = 0;
-    // Ten minutes, no hiring or free money. Reassign the crew to food and current demand.
-    for (let tick = 0; tick < 600; tick++) {
-      const wanted = state.order
-        ? Object.entries(state.order.needs).filter(([r, n]) => state.stock[r as keyof typeof state.stock] < n).map(([r]) => r as keyof typeof state.stock)
-        : ["wood" as const];
-      const feed = state.level >= 2 && foodStock(state) < 12;
-      state.workers.forEach((w, i) => {
-        const job = feed && i === 0 ? "egg" : wanted[(feed ? Math.max(0, i - 1) : i) % wanted.length] ?? "wood";
-        if (w.job !== job) state = assignJob(state, w.id, job);
-      });
-      state = simulateTick(state);
-      const next = fulfillOrder(state);
-      if (next !== state) { delivered++; earned += state.order!.reward; }
-      state = next;
-    }
-    expect(delivered).toBeGreaterThanOrEqual(5);
-    expect(state.money).toBeGreaterThan(0);
-    expect(state.money).toBeLessThanOrEqual(earned);
-  }
-});
-
-
-describe("game clock and pause", () => {
-  it("works from 08:00 inclusive until 20:00 exclusive, preserving overnight progress", () => {
-    const base = assignJob(emptyState(), "w1", "wood");
-    let state = simulateTick({ ...base, minuteOfDay: 479 });
-    expect(state.minuteOfDay).toBe(480);
-    expect(state.workers[0].progress).toBe(0);
-    state = simulateTick(state);
-    expect(state.workers[0].progress).toBe(20);
-    state = simulateTick({ ...state, minuteOfDay: 1199 });
-    expect(state.minuteOfDay).toBe(1200);
-    expect(state.workers[0].progress).toBe(40);
-    const night = simulateTick(state);
-    expect(night.workers).toEqual(state.workers);
-    expect(night.stock).toEqual(state.stock);
-    expect(night.consumptionIn).toBe(state.consumptionIn);
-    expect(simulateTick({ ...night, minuteOfDay: 480 }).workers[0].progress).toBe(60);
-  });
-  it("rolls into the next day and freezes every timer while paused", () => {
-    const base = { ...ordered(), day: 7, minuteOfDay: 1439 };
-    const next = simulateTick(base);
-    expect(next.day).toBe(8);
-    expect(next.minuteOfDay).toBe(0);
-    const paused = { ...base, paused: true };
-    expect(simulateTick(paused)).toBe(paused);
-  });
-  it("migrates old saves and validates and persists clock state", () => {
-    const base = { ...emptyState(), money: 12, day: 4, minuteOfDay: 1300, paused: true };
-    const loaded = loadGame(JSON.stringify(base));
-    expect(loaded.day).toBe(4);
-    expect(loaded.minuteOfDay).toBe(1300);
-    expect(loaded.paused).toBe(true);
-    for (const clock of [{ day: undefined, minuteOfDay: undefined, paused: undefined }, { day: -1, minuteOfDay: 1440, paused: "true" }]) {
-      const migrated = loadGame(JSON.stringify({ ...base, ...clock }));
-      expect(migrated.day).toBe(1);
-      expect(migrated.minuteOfDay).toBe(480);
-      expect(migrated.paused).toBe(false);
-      expect(migrated.money).toBe(12);
-    }
-  });
-});
-
-
-it("skips nights to the upcoming 08:00 without consuming resources or timers", () => {
-  const daytime = emptyState();
-  expect(skipToMorning(daytime)).toBe(daytime);
-  expect(skipToMorning({ ...daytime, minuteOfDay: 1199 }).minuteOfDay).toBe(1199);
-  for (const minuteOfDay of [1200, 1439, 0, 479]) {
-    const state = { ...emptyState(), day: 3, minuteOfDay, paused: true };
-    const next = skipToMorning(state);
-    expect(next.minuteOfDay).toBe(480);
-    expect(next.day).toBe(minuteOfDay >= 1200 ? 4 : 3);
-    expect(next.money).toBe(minuteOfDay >= 1200 ? -0.75 : 0);
-    expect(next.stock).toEqual(state.stock);
-    expect(skipToMorning(next)).toBe(next);
-  }
-});
-
-
-it.each([true, false])("resolves the open order exactly once on next day (enough stock: %s)", (enough) => {
-  const base = ordered();
-  const state = { ...base, minuteOfDay: 1200, paused: true,
-    stock: { ...base.stock, wood: enough ? 20 : 19 } };
-  const next = skipToMorning(state);
-  expect(next.order).toBeNull();
-  expect(next.lastOrder).toEqual({ id: 1, success: enough, reward: enough ? 74 : 0, penalty: enough ? 0 : 37 });
-  expect(next.money).toBe(enough ? 73.25 : -37.75);
-  expect(next.stock).toEqual(enough ? zeroStock() : state.stock);
-  expect(next.minuteOfDay).toBe(480);
-  expect(next.day).toBe(2);
-  expect(next.paused).toBe(true);
-  expect(next.consumptionIn).toBe(state.consumptionIn);
-  expect(next.laborEventIn).toBe(state.laborEventIn);
-  expect(next.orderIn).toBe(state.orderIn);
-  expect(skipToMorning(next)).toBe(next);
-  expect(fulfillOrder(next)).toBe(next);
-});
-
-
-describe("daily wages", () => {
-  it("uses one percent of the current hiring cost for every worker", () => {
-    const base = emptyState();
-    expect(dailyWagePerWorker(base)).toBe(0.25);
-    expect(dailyPayroll(base)).toBe(0.75);
-    const hired = hireWorker({ ...base, money: 25 });
-    expect(dailyWagePerWorker(hired)).toBe(0.4);
-    expect(dailyPayroll(hired)).toBe(1.6);
-    expect(skipToMorning({ ...hired, minuteOfDay: 1200 }).money).toBe(-1.6);
-  });
-  it("charges at midnight once, including idle, striking and unhoused workers", () => {
-    const base = emptyState();
-    const state = { ...base, minuteOfDay: 1439, laborEventIn: 9999,
-      workers: [...base.workers.map(w => ({ ...w, strikeRemaining: 100 })), { ...base.workers[0], id: "w4" }] };
-    expect(simulateTick({ ...state, paused: true })).toEqual({ ...state, paused: true });
-    const midnight = simulateTick(state);
-    expect(midnight.money).toBe(-1.6);
-    expect(midnight.day).toBe(2);
-    const loaded = loadGame(JSON.stringify(midnight));
-    const morning = skipToMorning(loaded);
-    expect(morning.money).toBe(-1.6);
-    expect(morning.day).toBe(2);
-    expect(simulateTick(morning).money).toBe(-1.6);
-    expect(skipToMorning({ ...morning, minuteOfDay: 1200 }).money).toBe(-3.2);
-  });
+it("uses idle workers before hiring and does not hire around housing or strike restrictions", () => {
+  const state = g.purchaseSite(g.emptyState(), "lumber");
+  const next = g.hireForJob(state, "wood");
+  expect(next.workers).toHaveLength(3);
+  expect(next.workers[0].job).toBe("wood");
+  expect(next.money).toBe(state.money);
+  const striking = {
+    ...state,
+    workers: state.workers.map((w) => ({ ...w, strikeRemaining: 10 })),
+  };
+  expect(g.hireForJob(striking, "wood")).toBe(striking);
+  const full = {
+    ...state,
+    workers: state.workers.map((w) => ({ ...w, job: "wood" as const })),
+  };
+  expect(g.hireForJob(full, "wood")).toBe(full);
 });

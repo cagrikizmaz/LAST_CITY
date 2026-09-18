@@ -1,82 +1,55 @@
-# KÜLDEN
+﻿# KÜLDEN
 
-**Her emek, yeni bir şehir.**
-
-KÜLDEN, kaynak üretimi, işçi yönetimi ve ticaret üzerine kurulu bir tarayıcı oyunudur. Üç işçi ve ilk üretim sahasıyla başla; kasanı büyüt, yeni kaynakları aç ve 100 seviyelik üretim ağını kur.
+Kaynak üretimi, işçi yönetimi ve ticaret oyunu.
 
 ## Çalıştırma
-
-Node.js 22.12 veya üzeri gerekir.
 
 ```sh
 npm ci
 npm run dev
+npm test
+npm run build
 ```
 
-Terminalde gösterilen yerel adresi tarayıcıda aç.
+## Üretim kategorileri
 
-## Nasıl oynanır?
+- Orman: Oduncu, Avcı.
+- Tarım: Tarla, Bahçe.
+- Hayvancılık: İnek Ahırı, Kümes, Koyun Ağılı.
+- Maden: Kömür, Bakır, Kil, Kum, Altın, Gümüş, Taş, Demir.
 
-- İlk sahaya boşta duran işçileri ata. Üretim yalnızca stok kazandırır; para sadece sipariş teslimatından gelir.
-- Kasadaki para seviye eşiğine ulaştığında yeni sahalar otomatik açılır.
-- Yeni işçiler al, ekibini sahalar arasında dağıt ve siparişler için stok biriktir.
-- Siparişleri süre içinde teslim et. Süre dolduğunda stok yeterliyse otomatik teslim edilir; yetersizse ödülün yarısı kadar ceza uygulanır ve kasa borca düşebilir.
-- Grevler ve istifalar üretimi etkiler. Grev 10 dakika sürer; ihtiyaç duyduğunda ücretli yeni işçi alıp atayabilirsin.
+Kategori kartlarında ürün stokları, çalışan saha sayısı, eksik ekipman ve hammadde özetleri görünür. Kategoriye, ardından sahaya tıklayarak detay ekranını aç. Saatin yanındaki küçük kaynak simgeleri stokları gösterir ve ilgili sahaya kısayol sağlar. Sahada işçi, ekipman, ürün bazında üretim hedefleri ve sağ alttaki depo doluluk grafikleri yönetilir. Sağ alttaki asistan portreleri ihtiyaç sayısını bildirir; tıklayınca ilgili sorumlu açılır pencerede ihtiyaçlarını anlatır ve ekipman satın almayı sağlar. Escape ile kapatılabilir.
 
-## Ekran düzeni
+## Ekonomi ve ekipman
 
-- **Sol:** Envanter; arama, stok filtreleri ve üretim sahasına gitme kısayolları.
-- **Orta:** Üretim sahaları; Tüm sahalar, Açık, Üretimde ve Grevde filtreleri. En az 1280 piksel genişlikte satır başına beş kart, sayfa başına 15 saha gösterilir. Dar ekranlarda sütun sayısı azalır.
-- **Sağ:** Siparişler, barınak ve günlük işçi ücretleri.
-- **Üst:** Kasa, sonraki hedef ve ilerleme bilgisi.
+Yeni oyun 250₺, üç işçi ve üç yatakla başlar. Hiçbir saha otomatik açılmaz. İlk saha 100₺; sonraki satın alımlar kategoriden bağımsız olarak 200₺, 400₺, 800₺ şeklinde ilerler. Saha yükseltmesi bu satın alma fiyatını etkilemez.
 
-Envanter ürünleri stok miktarına göre azdan çoğa sıralanır. Bir ürüne tıklamak ilgili üretim kartını açar ve odaklar.
+Her işçi, sahaya özel tam ekipman setine ihtiyaç duyar. Örneğin oduncuda balta ve eldiven, kömür madeninde kazma, eldiven, el arabası ve baret gerekir. Ekipmanlar sahalar arasında paylaşılmaz. Müdür, mevcut işçi sayısına göre eksikleri bildirir; boş sahada en az bir set ister. Yeni işçi atamadan önce ek set satın alınabilir.
 
-## Kayıt
+Ekipmanın başlangıç dayanıklılığı 100'dür. Her tamamlanan ürün, kullanılan ekipmanı `1 / ekipman seviyesi` kadar aşındırır. Kırık ekipman çalışmaz ve yükseltilemez; yenisi alınır. Kırılmadan yükseltmek seviyeyi artırır ve dayanıklılığı 100'e yeniler. Tam setin en düşük seviyesi üretim hızını belirler. Ekipman en fazla seviye 10'a yükselir.
 
-Oyun aynı tarayıcı ve adres için `localStorage` içinde otomatik kaydedilir. İsim değişikliğinden önceki kayıtlarla uyumluluk için `last-city-workers-v2` anahtarı korunur. Tarayıcı verilerini temizlemek kaydı siler; **Yeni oyun** mevcut ilerlemeyi sıfırlar. Üretim oyun açıkken ilerler; çevrimdışı ilerleme hesaplanmaz.
+## Saha ve depo
 
-## Geliştirme
+Saha seviye 1'de üç işçi kapasitesine sahiptir; her seviye üç işçi daha sağlar. Oduncu ve madenlerde başlangıç rezervi 100 birimdir. Rezerv bitince üretim durur; yükseltme yeni seviyenin `100 × seviye` rezervini açar. Saha yükseltmeleri 50₺'den başlar ve her seviyede iki katına çıkar; üst sınır seviye 20'dir.
 
-React, TypeScript ve Vite kullanılır. Oyun mantığı ve arayüz testleri Vitest ile çalışır.
+Hammadde gerektirmeyen ürünler, ekipmanlı işçi ve depoda yer oldukça sürekli üretilir. İnek ahırında süt, koyun ağılında yün ve koyun sütü otomatik üretilir. İşlenen ürünlerin altında − / adet / + kontrolü bulunur; sayı kalan üretim hedefidir, tamamlandıkça azalır. Toplam bekleyen hedef kapasitesi `100 × saha seviyesi` adettir.
 
-```sh
-npm test         # Oyun mantığı ve arayüz testleri
-npm run build   # TypeScript kontrolü ve dist/ çıktısı
-npx vite preview # Derlenmiş oyunu yerelde incele
-```
+- 2 süt → 1 kaymak.
+- 3 süt → 1 tereyağı.
+- 2 süt + 1 tereyağı → 1 peynir.
+- 2 koyun sütü → 1 koyun peyniri.
+- Süt, koyun sütü ve yün için hammadde ve üretim talimatı gerekmez.
 
-`npm run format` Prettier ile biçimlendirme yapar. Mevcut `npm run lint` komutu için henüz ESLint yapılandırması bulunmaz.
+Ürünler bağımsız üretim çubuklarıyla eş zamanlı ilerler; biri diğerinin bitmesini beklemez. Çalışabilir ekip her aktif ürün hattının ilerlemesine katkı verir; ekipman her tamamlanan ürün için aşınır. Hammadde eksikse veya çıktı deposu doluysa yalnızca o ürün bekler. Her ürün için seçilen miktarın toplam hammadde açığı güncel stoktan hesaplanıp kırmızı gösterilir. Diğer ürünlerle ortak kullanılan hammaddeler tamamlanma anında tekrar kontrol edilir ve stok eksiye düşmez. Miktarı sıfıra indirmek hedefi ve o ürünün kısmi ilerlemesini iptal eder. Hammaddeler yalnızca ürün tamamlanınca tüketilir. Her ürünün deposu 100 kapasiteyle başlar; depo yükseltmesi mevcut kapasite kadar para karşılığında +100 yer açar. Ürün ilerlemeleri kaydedilir; eski kayıtlardaki süt/yün üretim talimatları sürekli üretime dönüştürülür.
 
-## Dosya yapısı
+## Ticaret ve işçiler
 
-| Yol | İçerik |
-| --- | --- |
-| `src/App.tsx` | Oyun arayüzü, filtreler, sayfalama ve kayıt |
-| `src/game.ts` | Üretim, seviyeler, işçiler, ticaret ve günlük ücret kuralları |
-| `src/styles.css` | Görsel tasarım ve farklı ekran boyutları |
-| `src/*.test.*` | Oyun ve arayüz testleri |
-| `public/assets/` | Oyun görselleri |
-| `docs/ORIGINAL_DESIGN_SPEC.md` | İlk tasarım belgesi; tarihsel referanstır, mevcut özelliklerin tamamını yansıtmaz |
+Gelir sipariş teslimatından gelir; üretim doğrudan para kazandırmaz. Siparişler yalnızca satın alınmış sahaların ürünlerini ister. İlk saha alınmadan sipariş oluşmaz. Sipariş süresi bittiğinde stok yeterliyse teslim edilir, eksikse ödülün yarısı ceza kesilir. Yeni siparişler 15–25 saniye arayla gelir.
 
-`node_modules/` bağımlılıkları ve `dist/` derleme çıktılarıdır. Git dışında tutulurlar. TypeScript kontrolü kök dizine JavaScript, bildirim veya önbellek dosyası üretmez.
+İşçiler 08:00–20:00 arasında çalışır. Her gerçek saniye bir oyun dakikasıdır. Duraklatma tüm simülasyon sayaçlarını durdurur. Mesai dışında sabaha geçilebilir; açık sipariş sonuçlandırılır ve gün değişiyorsa günlük ücret ödenir. Ücret kişi başına güncel işe alım maliyetinin %10'udur. Grev, istifa ve barınak kuralları korunur; barınaksız işçiler çalışamaz.
 
-### Barınak
+## Kayıt ve doğrulama
 
-Başlangıçta 3 kişilik barınak bulunur. Her yeni barınak 3 yatak ekler; bedeli ilk yapımda 30₺, ardından her yapımda 30₺ artar. Barınaksız işçiler göreve atanamaz ve üretim yapamaz. Boşta ve grevdeki işçiler de yatak kullanır. Eski kayıtlara mevcut ekibe yetecek kapasite eklenir.
+Oyun `last-city-workers-v2` anahtarıyla tarayıcıya kaydedilir; çevrimdışı üretim yoktur. Yeni oyun kaydı sıfırlar. Eski kayıtlardaki para, stok ve işçiler korunur; yeni katalogda karşılığı olan açılmış sahalar ve başlangıç ekipmanları aktarılır. Katalogda karşılığı olmayan görevlerin işçileri boşa alınır; eski ürün stokları korunur.
 
-### Sipariş ekonomisi
-
-İlk sipariş 15 saniyede gelir. Bir sipariş teslim edildiğinde veya süresi dolduğunda sonraki sipariş 15–25 saniye içinde gelir. Erken teslimat, yeni siparişi daha erken almanı sağlar. Ödül, istenen ürünlerin toplam birim değerinin iki katıdır. Üretim kasaya para eklemez.
-
-Siparişler en fazla 6 ürün türü içerir; çeşit sayısı barınan ve grevde olmayan işçi sayısını aşmaz. Miktar artışı ekip büyüklüğüne göre sınırlıdır ve hiçbir ürün kendi depo kapasitesini aşacak miktarda istenmez. Fazla stok siparişle eritilebilir. Teslim süresi stok açığı ve ekibe göre hesaplanır (60–240 saniye); üretim ve işçi ataması için pay bırakılır. Mevcut yarım ödül cezası korunur.
-
-Depo dolduğunda yalnızca ilgili ürünün üretimi durur. Teslimat, tüketim veya depo yükseltmesiyle yer açılınca üretim devam eder. Eski kayıtlardaki para, stok ve aktif sipariş korunur; sonraki sipariş beklemesi kısalır.
-
-## Oyun saati ve günlük ücretler
-
-Oyun 1. gün 08:00’da başlar. Her saniye 1 oyun dakikası ilerler. İşçiler 08:00–20:00 arasında üretir. Mesai dışında sipariş ve grev sayaçları devam eder. **Duraklat / Devam et** saati ve otomatik simülasyonu dondurur; yönetim işlemleri yapılabilir. Saat ve duraklatma durumu kaydedilir.
-
-**Sonraki güne geç** mesai dışında yaklaşan 08:00’a atlar. Açık sipariş stok yeterliyse teslim edilir; yetersizse başarısız olur ve ödülün yarısı ceza kesilir.
-
-Her gün devrinde tüm işçiler için güncel yeni işçi alma maliyetinin %1’i kadar kişi başı günlük ücret kesilir. Gece yarısı veya sonraki güne atlama ödemeyi tetikler; aynı gün içinde sabaha atlamak tekrar ücret kesmez. Boşta, grevde ve barınaksız işçiler dahildir. Kasa borca düşebilir. İşçiler artık yemek tüketmez ve açlık üretimi yavaşlatmaz.
+`npm test` oyun kuralları ve DOM üzerinden kullanıcı akışlarını, `npm run build` TypeScript ve üretim derlemesini doğrular. ESLint yapılandırması henüz bulunmaz.
