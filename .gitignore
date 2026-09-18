@@ -7,3 +7,6 @@ vite.config.d.ts
 .env.*
 !.env.example
 *.log
+artifacts/
+*.jks
+*.keystore

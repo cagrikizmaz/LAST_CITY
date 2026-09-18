@@ -7,10 +7,14 @@
     "dev": "vite",
     "build": "tsc --noEmit && tsc -p tsconfig.node.json --noEmit && vite build",
     "test": "vitest run",
+    "android:sync": "npm run build && cap sync android",
+    "android:apk": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-android.ps1",
     "lint": "eslint .",
     "format": "prettier --write ."
   },
   "dependencies": {
+    "@capacitor/android": "^8.5.2",
+    "@capacitor/core": "^8.5.2",
     "@jridgewell/trace-mapping": "^0.3.31",
     "@vitejs/plugin-react": "latest",
     "react": "latest",
@@ -19,6 +23,7 @@
     "vite": "latest"
   },
   "devDependencies": {
+    "@capacitor/cli": "^8.5.2",
     "@types/react": "latest",
     "@types/react-dom": "latest",
     "eslint": "latest",
