@@ -34,7 +34,7 @@ it("hires and delivers through the UI, and persists both actions", async () => {
     expect(saved().stock.wood).toBe(0);
     expect(container.querySelector(".order-card")?.textContent).toContain("Başarılı");
     await act(async () => vi.advanceTimersByTime(1000));
-    expect(saved().consumptionIn).toBe(29);
+    expect(saved().consumptionIn).toBe(30);
   } finally {
     await act(async () => root.unmount());
     container.remove();
@@ -237,7 +237,7 @@ it("pauses and resumes the clock through the UI without catching up", async () =
     await act(async () => button().click());
     await act(async () => vi.advanceTimersByTime(1000));
     expect(saved().minuteOfDay).toBe(481);
-    expect(saved().consumptionIn).toBe(29);
+    expect(saved().consumptionIn).toBe(30);
     expect(container.querySelector(".clock-controls strong")?.textContent).toBe("08:01");
   } finally {
     await act(async () => root.unmount());
@@ -262,6 +262,9 @@ it("offers next day at 20:00 and persists the morning when clicked", async () =>
     await act(async () => container.querySelector<HTMLButtonElement>(".next-day-button")!.click());
     const after = loadGame(localStorage.getItem("last-city-workers-v2"));
     expect(after.day).toBe(2);
+    expect(after.money).toBe(-0.75);
+    expect(container.querySelector(".payroll-card")?.textContent).toContain("0,75");
+    expect(container.querySelector(".camp-card")).toBeNull();
     expect(after.minuteOfDay).toBe(480);
     expect(after.consumptionIn).toBe(before.consumptionIn);
     expect(after.orderIn).toBe(before.orderIn);
@@ -289,7 +292,7 @@ it.each([true, false])("settles the order through the next-day button (enough st
     await act(async () => container.querySelector<HTMLButtonElement>(".next-day-button")!.click());
     const saved = loadGame(localStorage.getItem("last-city-workers-v2"));
     expect(saved.order).toBeNull();
-    expect(saved.money).toBe(enough ? 20 : -10);
+    expect(saved.money).toBe(enough ? 19.25 : -10.75);
     expect(saved.lastOrder?.success).toBe(enough);
     expect(container.querySelector(".order-card")?.textContent).toContain(enough ? "Ba\u015far\u0131l\u0131" : "Ba\u015far\u0131s\u0131z");
   } finally {

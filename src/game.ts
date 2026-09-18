@@ -11,7 +11,6 @@ export const levels: LevelId[] = Array.from({ length: 100 }, (_, i) => i + 1);
 export const MAX_LEVEL = 100;
 export const zeroStock = (): Record<Resource, number> => Object.fromEntries(resources.map(resource => [resource, 0])) as Record<Resource, number>;
 export const resourceLevel: Record<Resource, LevelId> = { wood: 1, egg: 2, fruit: 3, stone: 4, coal: 5, iron: 6 };
-export const CONSUMPTION_INTERVAL = 30;
 export const FIRST_ORDER_DELAY = 15;
 export const ORDER_DELAY_MIN = 15;
 export const ORDER_DELAY_MAX = 25;
@@ -24,7 +23,8 @@ export const formatGameTime = (minute: number): string => `${String(Math.floor(m
 export const togglePause = (state: GameState): GameState => ({ ...state, paused: !state.paused });
 export function skipToMorning(state: GameState): GameState {
   if (isWorkingHours(state)) return state;
-  const next = finishOrder(state, canFulfillOrder(state));
+  const resolved = finishOrder(state, canFulfillOrder(state));
+  const next = state.minuteOfDay >= WORK_END ? payDailyWages(resolved) : resolved;
   return { ...next, day: state.day + (state.minuteOfDay >= WORK_END ? 1 : 0),
     minuteOfDay: WORK_START, lastTick: Date.now() };
 }
@@ -58,7 +58,7 @@ export function changeWorkers(state: GameState, job: Resource, delta: 1 | -1): G
   return worker ? assignJob(state, worker.id, delta === 1 ? job : "idle") : state;
 }
 
-const initialState = (): GameState => ({ version: 10, day: 1, minuteOfDay: WORK_START, paused: false, shelterCapacity: 3, warehouseCapacity: Object.fromEntries(resources.map(resource => [resource, 100])) as Record<Resource, number>, laborEventIn: 240 + Math.floor(Math.random() * 241), laborSequence: 0, laborNotices: [], orderQuantities: zeroStock(), consumptionIn: 30, shortage: false, order: null, orderIn: FIRST_ORDER_DELAY, orderSequence: 0, lastOrder: null, seed: Date.now() >>> 0, money: 0, level: 1, selectedWorker: null, workers: [{ id: "w1", name: "", role: "Toplayıcı", job: "idle", progress: 0 }, { id: "w2", name: "", role: "Taşıyıcı", job: "idle", progress: 0 }, { id: "w3", name: "", role: "Usta", job: "idle", progress: 0 }], stock: zeroStock(), ledger: [{ id: 1, text: "Üç işçi kampın başında bekliyor.", tone: "system" }], lastTick: Date.now() });
+const initialState = (): GameState => ({ version: 11, day: 1, minuteOfDay: WORK_START, paused: false, shelterCapacity: 3, warehouseCapacity: Object.fromEntries(resources.map(resource => [resource, 100])) as Record<Resource, number>, laborEventIn: 240 + Math.floor(Math.random() * 241), laborSequence: 0, laborNotices: [], orderQuantities: zeroStock(), consumptionIn: 30, shortage: false, order: null, orderIn: FIRST_ORDER_DELAY, orderSequence: 0, lastOrder: null, seed: Date.now() >>> 0, money: 0, level: 1, selectedWorker: null, workers: [{ id: "w1", name: "", role: "Toplayıcı", job: "idle", progress: 0 }, { id: "w2", name: "", role: "Taşıyıcı", job: "idle", progress: 0 }, { id: "w3", name: "", role: "Usta", job: "idle", progress: 0 }], stock: zeroStock(), ledger: [{ id: 1, text: "Üç işçi kampın başında bekliyor.", tone: "system" }], lastTick: Date.now() });
 export const emptyState = (): GameState => initialState();
 export function addLedger(state: GameState, text: string, tone: LedgerItem["tone"] = "system"): GameState { return { ...state, ledger: [{ id: (state.ledger[0]?.id ?? 0) + 1, text, tone }, ...state.ledger].slice(0, 8) }; }
 export function assignJob(state: GameState, workerId: string, job: Job): GameState { const worker = state.workers.find((item) => item.id === workerId); if (!worker || worker.strikeRemaining || (job !== "idle" && (!isHoused(state, workerId) || !resources.includes(job) || state.level < resourceLevel[job]))) return state; const next = { ...state, workers: state.workers.map((item) => item.id === workerId ? { ...item, job, progress: 0 } : item) }; const label = job === "idle" ? "boşa alındı" : `${levelInfo[resourceLevel[job]].title} görevine gönderildi`; return addLedger(next, `Bir işçi ${label}.`, job === "idle" ? "system" : job); }
@@ -68,15 +68,16 @@ export function simulateTick(state: GameState): GameState {
   const workers = state.workers.map(worker => {
     if (!isWorkingHours(state) || !isHoused(state, worker.id) || worker.job === "idle" || worker.strikeRemaining ||
       stock[worker.job] >= state.warehouseCapacity[worker.job]) return worker;
-    const progress = worker.progress + (state.shortage ? 10 : 20);
+    const progress = worker.progress + 20;
     if (progress < 100) return { ...worker, progress };
     // Production only fills storage. Order delivery is the sole source of income.
     stock[worker.job] += 1;
     return { ...worker, progress: 0 };
   });
   const elapsed = state.minuteOfDay + MINUTES_PER_TICK;
-  return simulateLabor(simulateEconomy(advanceLevel({ ...state, stock, workers,
-    minuteOfDay: elapsed % 1440, day: state.day + Math.floor(elapsed / 1440), lastTick: Date.now() })));
+  const next = simulateEconomy(advanceLevel({ ...state, stock, workers,
+    minuteOfDay: elapsed % 1440, day: state.day + Math.floor(elapsed / 1440), lastTick: Date.now() }));
+  return simulateLabor(elapsed >= 1440 ? payDailyWages(next) : next);
 }
 export function unlockLevel(state: GameState, level: LevelId): GameState { if (state.money < levelInfo[level].unlock || state.level >= level) return state; return addLedger({ ...state, level }, `Yeni ekran açıldı: ${levelInfo[level].title}.`, "system"); }
 
@@ -111,6 +112,14 @@ export function buildShelter(state: GameState): GameState {
 }
 
 export function hiringCost(state: GameState): number { return 25 + Math.max(0, state.workers.length - 3) * 15; }
+export const dailyWagePerWorker = (state: GameState): number => hiringCost(state) / 100;
+export const dailyPayroll = (state: GameState): number => Math.round(hiringCost(state) * state.workers.length) / 100;
+function payDailyWages(state: GameState): GameState {
+  const amount = dailyPayroll(state);
+  return addLedger({ ...state, money: Math.round((state.money - amount) * 100) / 100 },
+    `Günlük işçi ücretleri: ${state.workers.length} işçi, −${amount.toLocaleString("tr-TR")}₺.`);
+}
+
 export function hireWorker(state: GameState): GameState {
   const cost = hiringCost(state);
   if (state.money < cost) return state;
@@ -159,9 +168,7 @@ function simulateLabor(state: GameState): GameState {
     selectedWorker: affected.has(next.selectedWorker ?? "") ? null : next.selectedWorker };
   return notifyLabor(next, `${title}: ${count} kişi istifa etti. Yerlerine yeni işçi almak ücretli.`);
 }
-export function consumptionNeeds(state: GameState) {
-  return { food: state.level >= 2 ? state.workers.length : 0 };
-}
+
 export function canFulfillOrder(state: GameState): boolean {
   return state.order !== null && resources.every(resource => state.stock[resource] >= state.order!.needs[resource]);
 }
@@ -183,22 +190,7 @@ export function fulfillOrder(state: GameState): GameState {
   return canFulfillOrder(state) ? finishOrder(state, true) : state;
 }
 function simulateEconomy(state: GameState): GameState {
-  let next = { ...state, consumptionIn: state.consumptionIn - 1 };
-  if (next.consumptionIn <= 0) {
-    const stock = { ...next.stock };
-    const needs = consumptionNeeds(next);
-    // Eat the most plentiful food first, preserving variety for orders.
-    let food = 0;
-    while (food < needs.food) {
-      const resource = foodResources.reduce((best, candidate) => stock[candidate] > stock[best] ? candidate : best);
-      if (stock[resource] <= 0) break;
-      stock[resource]--;
-      food++;
-    }
-    const shortage = food < needs.food;
-    next = addLedger({ ...next, stock, shortage, consumptionIn: CONSUMPTION_INTERVAL },
-      `Kamp tüketimi: ${food} gıda.${shortage ? " Erzak eksik: üretim %50 hızda." : " İhtiyaçlar karşılandı: üretim tam hızda."}`);
-  }
+  let next = state;
   if (next.order) {
     next = { ...next, order: { ...next.order, remaining: next.order.remaining - 1 } };
     if (next.order!.remaining <= 0) next = finishOrder(next, canFulfillOrder(next));
@@ -240,8 +232,8 @@ function simulateEconomy(state: GameState): GameState {
           : pressure(resource) === "scarce" ? Math.min(limit, base + random(2, 4)) : base);
       }
       const missing = requested.reduce((sum, resource) => sum + Math.max(0, needs[resource] - next.stock[resource]), 0);
-      // Allow food production and slow production during shortages, plus time to reassign.
-      const netRate = Math.max(0.05, crew * 0.1 - (next.level >= 2 ? next.workers.length / CONSUMPTION_INTERVAL : 0));
+      // Allow time to produce missing stock and reassign workers.
+      const netRate = crew * 0.2;
       const duration = Math.max(random(60, 90), Math.min(240, Math.ceil(missing / netRate) + 20));
       const reward = Math.ceil(resources.reduce((total, resource) => total + needs[resource] * levelInfo[resourceLevel[resource]].price, 0) * 2);
       const order = { id: next.orderSequence + 1, needs, reward, duration, remaining: duration };
@@ -272,10 +264,10 @@ export function loadGame(raw: string | null): GameState {
     const orderIn = Number.isFinite(saved.orderIn) && saved.orderIn > 0
       ? (saved.version >= 9 ? saved.orderIn : Math.min(saved.orderIn, ORDER_DELAY_MAX)) : FIRST_ORDER_DELAY;
     return advanceLevel({ ...defaults, ...saved, stock, order, orderIn, orderQuantities, warehouseCapacity, shelterCapacity,
-      lastOrder: saved.lastOrder ? { penalty: 0, ...saved.lastOrder } : null, version: 10,
+      lastOrder: saved.lastOrder ? { penalty: 0, ...saved.lastOrder } : null, version: 11,
       day: Number.isSafeInteger(saved.day) && saved.day >= 1 ? saved.day : 1,
       minuteOfDay: Number.isInteger(saved.minuteOfDay) && saved.minuteOfDay >= 0 && saved.minuteOfDay < 1440 ? saved.minuteOfDay : WORK_START,
-      paused: saved.paused === true, lastTick: Date.now() });
+      shortage: false, consumptionIn: 30, paused: saved.paused === true, lastTick: Date.now() });
   } catch { return defaults; }
 }
 

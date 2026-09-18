@@ -1,5 +1,5 @@
 ﻿import { describe, expect, it } from "vitest";
-import { skipToMorning, buildShelter, isHoused, shelterCost, warehouseResources, warehouseUpgradeCost, upgradeWarehouse, foodResources, foodStock, hireForJob, changeWorkers, assignJob, emptyState, levelInfo, simulateTick, hireWorker, hiringCost, fulfillOrder, loadGame, zeroStock } from "./game";
+import { dailyPayroll, dailyWagePerWorker, skipToMorning, buildShelter, isHoused, shelterCost, warehouseResources, warehouseUpgradeCost, upgradeWarehouse, foodResources, foodStock, hireForJob, changeWorkers, assignJob, emptyState, levelInfo, simulateTick, hireWorker, hiringCost, fulfillOrder, loadGame, zeroStock } from "./game";
 
 describe("işçi üretim döngüsü", () => {
   it("üretim stok oluşturur ama para kazandırmaz", () => {
@@ -27,16 +27,13 @@ describe("economy", () => {
     expect(hiringCost(hired)).toBe(40);
     expect(new Set(hired.workers.map(w => w.id)).size).toBe(4);
   });
-  it("consumes supplies for idle workers too, and recovers from shortage", () => {
-    const state = { ...emptyState(), level: 3 as const, consumptionIn: 1, stock: { ...zeroStock(), wood: 1, egg: 1, fruit: 2 } };
-    const fed = simulateTick(state);
-    expect(fed.stock).toEqual({ ...zeroStock(), wood: 1, egg: 0, fruit: 0 });
-    expect(fed.shortage).toBe(false);
-    const hungry = simulateTick({ ...fed, consumptionIn: 1 });
-    expect(hungry.shortage).toBe(true);
-    const working = simulateTick(assignJob(hungry, "w1", "wood"));
-    expect(working.workers[0].progress).toBe(10);
-    expect(simulateTick({ ...hungry, consumptionIn: 1, stock: state.stock }).shortage).toBe(false);
+  it("keeps food stocks and produces at full speed even with legacy shortages", () => {
+    const state = { ...emptyState(), level: 3, shortage: true, consumptionIn: 1,
+      stock: { ...zeroStock(), egg: 2, fruit: 3 } };
+    const next = simulateTick(assignJob(state, "w1", "wood"));
+    expect(next.stock).toEqual(state.stock);
+    expect(next.workers[0].progress).toBe(20);
+    expect(loadGame(JSON.stringify(state)).shortage).toBe(false);
   });
   it("delivers early exactly once and pays the reward", () => {
     const state = ordered();
@@ -63,12 +60,11 @@ describe("economy", () => {
     expect(next.stock).toEqual(state.stock);
     expect(next.money).toBe(-37);
   });
-  it("consumption takes priority over an order expiring on the same tick", () => {
+  it("preserves food for an order expiring on the same tick", () => {
     const state = ordered();
     const next = simulateTick({ ...state, level: 3, consumptionIn: 1, order: { ...state.order, remaining: 1 } });
-    expect(next.lastOrder?.success).toBe(false);
-    expect(next.stock.wood).toBe(20);
-    expect(next.stock.egg).toBe(7);
+    expect(next.lastOrder?.success).toBe(true);
+    expect(next.stock).toEqual(zeroStock());
   });
   it("creates reproducible orders for unlocked resources and schedules the next", () => {
     const state = { ...emptyState(), seed: 123, orderIn: 1 };
@@ -272,37 +268,14 @@ describe("labor events", () => {
 });
 
 
-it("consumes every food category product without consuming wood or industrial stock", () => {
-  expect(foodResources).toContain("product14");
-  expect(foodResources).not.toContain("wood");
-  expect(foodResources).not.toContain("iron");
+it("never consumes any food category", () => {
   for (const resource of foodResources) {
-    const state = { ...emptyState(), level: 100, consumptionIn: 1,
+    let state = { ...emptyState(), level: 100, orderIn: 9999, laborEventIn: 9999,
       stock: { ...zeroStock(), wood: 50, iron: 50, [resource]: 3 } };
-    const next = simulateTick(state);
-    expect(next.stock[resource]).toBe(0);
-    expect(next.stock.wood).toBe(50);
-    expect(next.stock.iron).toBe(50);
-    expect(next.shortage).toBe(false);
-    expect(foodStock(next)).toBe(0);
+    const stock = state.stock;
+    for (let tick = 0; tick < 60; tick++) state = simulateTick(state);
+    expect(state.stock).toEqual(stock);
   }
-  const hungry = simulateTick({ ...emptyState(), level: 2, consumptionIn: 1, stock: { ...zeroStock(), wood: 100 } });
-  expect(hungry.stock.wood).toBe(100);
-  expect(hungry.shortage).toBe(true);
-  expect(simulateTick({ ...emptyState(), consumptionIn: 1 }).shortage).toBe(false);
-});
-
-it("combines food stocks and consumes the most plentiful food first", () => {
-  const state = { ...emptyState(), level: 14, consumptionIn: 1,
-    stock: { ...zeroStock(), egg: 1, fruit: 1, product14: 5 } };
-  const next = simulateTick(state);
-  expect(next.stock.egg).toBe(1);
-  expect(next.stock.fruit).toBe(1);
-  expect(next.stock.product14).toBe(2);
-  expect(foodStock(next)).toBe(4);
-  const mixed = simulateTick({ ...state, stock: { ...zeroStock(), egg: 1, fruit: 1, product14: 1 } });
-  expect(foodStock(mixed)).toBe(0);
-  expect(mixed.shortage).toBe(false);
 });
 
 describe("warehouse capacity", () => {
@@ -436,7 +409,7 @@ describe("order-only income and balance", () => {
 });
 
 
-it("sustains repeated order income with the starter crew and food consumption", () => {
+it("sustains repeated order income with the starter crew", () => {
   for (let seed = 1; seed <= 10; seed++) {
     let state = { ...emptyState(), seed: seed * 7919, laborEventIn: 9999 };
     let delivered = 0;
@@ -477,7 +450,7 @@ describe("game clock and pause", () => {
     const night = simulateTick(state);
     expect(night.workers).toEqual(state.workers);
     expect(night.stock).toEqual(state.stock);
-    expect(night.consumptionIn).toBe(state.consumptionIn - 1);
+    expect(night.consumptionIn).toBe(state.consumptionIn);
     expect(simulateTick({ ...night, minuteOfDay: 480 }).workers[0].progress).toBe(60);
   });
   it("rolls into the next day and freezes every timer while paused", () => {
@@ -512,7 +485,10 @@ it("skips nights to the upcoming 08:00 without consuming resources or timers", (
   for (const minuteOfDay of [1200, 1439, 0, 479]) {
     const state = { ...emptyState(), day: 3, minuteOfDay, paused: true };
     const next = skipToMorning(state);
-    expect(next).toEqual({ ...state, minuteOfDay: 480, day: minuteOfDay >= 1200 ? 4 : 3, lastTick: next.lastTick });
+    expect(next.minuteOfDay).toBe(480);
+    expect(next.day).toBe(minuteOfDay >= 1200 ? 4 : 3);
+    expect(next.money).toBe(minuteOfDay >= 1200 ? -0.75 : 0);
+    expect(next.stock).toEqual(state.stock);
     expect(skipToMorning(next)).toBe(next);
   }
 });
@@ -525,7 +501,7 @@ it.each([true, false])("resolves the open order exactly once on next day (enough
   const next = skipToMorning(state);
   expect(next.order).toBeNull();
   expect(next.lastOrder).toEqual({ id: 1, success: enough, reward: enough ? 74 : 0, penalty: enough ? 0 : 37 });
-  expect(next.money).toBe(enough ? 74 : -37);
+  expect(next.money).toBe(enough ? 73.25 : -37.75);
   expect(next.stock).toEqual(enough ? zeroStock() : state.stock);
   expect(next.minuteOfDay).toBe(480);
   expect(next.day).toBe(2);
@@ -535,4 +511,32 @@ it.each([true, false])("resolves the open order exactly once on next day (enough
   expect(next.orderIn).toBe(state.orderIn);
   expect(skipToMorning(next)).toBe(next);
   expect(fulfillOrder(next)).toBe(next);
+});
+
+
+describe("daily wages", () => {
+  it("uses one percent of the current hiring cost for every worker", () => {
+    const base = emptyState();
+    expect(dailyWagePerWorker(base)).toBe(0.25);
+    expect(dailyPayroll(base)).toBe(0.75);
+    const hired = hireWorker({ ...base, money: 25 });
+    expect(dailyWagePerWorker(hired)).toBe(0.4);
+    expect(dailyPayroll(hired)).toBe(1.6);
+    expect(skipToMorning({ ...hired, minuteOfDay: 1200 }).money).toBe(-1.6);
+  });
+  it("charges at midnight once, including idle, striking and unhoused workers", () => {
+    const base = emptyState();
+    const state = { ...base, minuteOfDay: 1439, laborEventIn: 9999,
+      workers: [...base.workers.map(w => ({ ...w, strikeRemaining: 100 })), { ...base.workers[0], id: "w4" }] };
+    expect(simulateTick({ ...state, paused: true })).toEqual({ ...state, paused: true });
+    const midnight = simulateTick(state);
+    expect(midnight.money).toBe(-1.6);
+    expect(midnight.day).toBe(2);
+    const loaded = loadGame(JSON.stringify(midnight));
+    const morning = skipToMorning(loaded);
+    expect(morning.money).toBe(-1.6);
+    expect(morning.day).toBe(2);
+    expect(simulateTick(morning).money).toBe(-1.6);
+    expect(skipToMorning({ ...morning, minuteOfDay: 1200 }).money).toBe(-3.2);
+  });
 });
