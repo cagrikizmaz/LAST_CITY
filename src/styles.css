@@ -127,3 +127,15 @@
 .shelter-card h2{margin:8px 0 14px}
 .shelter-card p{font-size:12px;line-height:1.6}
 .shelter-card button{width:100%;white-space:normal}
+
+/* Game clock and simulation controls. */
+.topbar{flex-wrap:wrap}
+.clock-controls{display:flex;align-items:center;gap:14px;padding:0 14px;border-left:1px solid #354438}
+.clock-controls small,.clock-controls span{display:block;color:#a4b79f;font-size:10px}
+.clock-controls strong{display:block;font-size:24px;color:#edc088;font-variant-numeric:tabular-nums}
+.clock-controls button{font-size:12px;white-space:nowrap}
+.clock-controls button[aria-pressed="true"]{border-color:#edc088;background:#403721}
+@media(max-width:680px){.clock-controls{order:4;flex-basis:100%;justify-content:space-between;border-left:0;border-top:1px solid #354438;padding:10px 0 0}}
+
+.clock-controls{flex-wrap:wrap}
+.clock-controls .next-day-button{border-color:#b49460;color:#edc088}

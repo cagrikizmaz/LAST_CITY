@@ -216,3 +216,85 @@ it("marks full warehouses as stopped and resumes production after a paid deliver
     expect(saved().money).toBe(20);
   } finally { await act(async () => root.unmount()); localStorage.clear(); vi.useRealTimers(); }
 });
+
+
+it("pauses and resumes the clock through the UI without catching up", async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  vi.useFakeTimers();
+  localStorage.setItem("last-city-workers-v2", JSON.stringify(emptyState()));
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  const saved = () => loadGame(localStorage.getItem("last-city-workers-v2"));
+  try {
+    await act(async () => root.render(<App />));
+    const button = () => container.querySelector<HTMLButtonElement>(".clock-controls button")!;
+    expect(container.querySelector(".clock-controls strong")?.textContent).toBe("08:00");
+    await act(async () => button().click());
+    const paused = localStorage.getItem("last-city-workers-v2");
+    await act(async () => vi.advanceTimersByTime(60000));
+    expect(localStorage.getItem("last-city-workers-v2")).toBe(paused);
+    expect(button().getAttribute("aria-pressed")).toBe("true");
+    await act(async () => button().click());
+    await act(async () => vi.advanceTimersByTime(1000));
+    expect(saved().minuteOfDay).toBe(481);
+    expect(saved().consumptionIn).toBe(29);
+    expect(container.querySelector(".clock-controls strong")?.textContent).toBe("08:01");
+  } finally {
+    await act(async () => root.unmount());
+    localStorage.clear();
+    vi.useRealTimers();
+  }
+});
+
+
+it("offers next day at 20:00 and persists the morning when clicked", async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  vi.useFakeTimers();
+  localStorage.setItem("last-city-workers-v2", JSON.stringify({ ...emptyState(), minuteOfDay: 1199 }));
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(<App />));
+    expect(container.querySelector(".next-day-button")).toBeNull();
+    await act(async () => vi.advanceTimersByTime(1000));
+    expect(container.querySelector(".clock-controls strong")?.textContent).toBe("20:00");
+    const before = loadGame(localStorage.getItem("last-city-workers-v2"));
+    await act(async () => container.querySelector<HTMLButtonElement>(".next-day-button")!.click());
+    const after = loadGame(localStorage.getItem("last-city-workers-v2"));
+    expect(after.day).toBe(2);
+    expect(after.minuteOfDay).toBe(480);
+    expect(after.consumptionIn).toBe(before.consumptionIn);
+    expect(after.orderIn).toBe(before.orderIn);
+    expect(container.querySelector(".next-day-button")).toBeNull();
+    expect(container.querySelector(".clock-controls strong")?.textContent).toBe("08:00");
+  } finally {
+    await act(async () => root.unmount());
+    localStorage.clear();
+    vi.useRealTimers();
+  }
+});
+
+
+it.each([true, false])("settles the order through the next-day button (enough stock: %s)", async (enough) => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  vi.useFakeTimers();
+  const base = emptyState();
+  localStorage.setItem("last-city-workers-v2", JSON.stringify({ ...base, minuteOfDay: 1200,
+    stock: { ...base.stock, wood: enough ? 10 : 9 },
+    order: { id: 1, needs: { ...base.stock, wood: 10 }, reward: 20, remaining: 60, duration: 90 } }));
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(<App />));
+    await act(async () => container.querySelector<HTMLButtonElement>(".next-day-button")!.click());
+    const saved = loadGame(localStorage.getItem("last-city-workers-v2"));
+    expect(saved.order).toBeNull();
+    expect(saved.money).toBe(enough ? 20 : -10);
+    expect(saved.lastOrder?.success).toBe(enough);
+    expect(container.querySelector(".order-card")?.textContent).toContain(enough ? "Ba\u015far\u0131l\u0131" : "Ba\u015far\u0131s\u0131z");
+  } finally {
+    await act(async () => root.unmount());
+    localStorage.clear();
+    vi.useRealTimers();
+  }
+});

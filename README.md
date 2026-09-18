@@ -73,3 +73,11 @@ Başlangıçta 3 kişilik barınak bulunur. Her yeni barınak 3 yatak ekler; bed
 Siparişler en fazla 6 ürün türü içerir; çeşit sayısı barınan ve grevde olmayan işçi sayısını aşmaz. Miktar artışı ekip büyüklüğüne göre sınırlıdır ve hiçbir ürün kendi depo kapasitesini aşacak miktarda istenmez. Fazla stok siparişle eritilebilir. Teslim süresi stok açığı ve ekibe göre hesaplanır (60–240 saniye); erzak ve yavaş üretim için pay bırakılır. Mevcut yarım ödül cezası korunur.
 
 Depo dolduğunda yalnızca ilgili ürünün üretimi durur. Teslimat, tüketim veya depo yükseltmesiyle yer açılınca üretim devam eder. Eski kayıtlardaki para, stok ve aktif sipariş korunur; sonraki sipariş beklemesi kısalır.
+
+## Oyun saati ve duraklatma
+
+Oyun 1. g?n 08:00?da ba?lar. Her ger?ek saniye 1 oyun dakikas?d?r; bir g?n 24 dakika s?rer. ???iler 08:00?20:00 aras?nda ?retir. Mesai d???nda atamalar ve ?retim ilerlemesi korunur; sipari?, erzak ve grev saya?lar? i?lemeye devam eder. Gece yar?s?nda g?n say?s? artar.
+
+?st ?ubuktaki **Duraklat / Devam et** d??mesi saati ve t?m otomatik sim?lasyonu dondurur. Duraklat?lm??ken y?netim i?lemleri yap?labilir. G?n, saat ve duraklatma durumu otomatik kaydedilir; eski kay?tlar ilerleme kayb? olmadan 1. g?n 08:00?dan ba?lar.
+
+20:00?dan sonraki mesai d??? saatlerde **Sonraki g?ne ge?** d??mesi g?r?n?r. D??me yakla?an 08:00?a atlar; gece yar?s? ge?mi?se mevcut g?n?n sabah?na ge?er. Ge?i?te a??k sipari? sonu?lan?r: stok yeterliyse ?r?nler teslim edilir ve ?d?l kazan?l?r; yetersizse sipari? ba?ar?s?z olur ve ?d?l?n yar?s? ceza kesilir. ?retim ilerlemesi, sonraki sipari? bekleme s?resi, erzak/grev saya?lar? ve duraklatma durumu korunur.

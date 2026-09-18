@@ -16,7 +16,20 @@ export const FIRST_ORDER_DELAY = 15;
 export const ORDER_DELAY_MIN = 15;
 export const ORDER_DELAY_MAX = 25;
 export type LaborNotice = { id: number; text: string };
-export type GameState = { shelterCapacity: number; warehouseCapacity: Record<Resource, number>; laborEventIn: number; laborSequence: number; laborNotices: LaborNotice[]; version: number; orderQuantities: Record<Resource, number>; consumptionIn: number; shortage: boolean; order: Order | null; orderIn: number; orderSequence: number; lastOrder: OrderResult | null; seed: number; money: number; level: LevelId; selectedWorker: string | null; workers: Worker[]; stock: Record<Exclude<Job, "idle">, number>; ledger: LedgerItem[]; lastTick: number };
+export const WORK_START = 8 * 60;
+export const WORK_END = 20 * 60;
+export const MINUTES_PER_TICK = 1;
+export const isWorkingHours = (state: GameState): boolean => state.minuteOfDay >= WORK_START && state.minuteOfDay < WORK_END;
+export const formatGameTime = (minute: number): string => `${String(Math.floor(minute / 60)).padStart(2, "0")}:${String(minute % 60).padStart(2, "0")}`;
+export const togglePause = (state: GameState): GameState => ({ ...state, paused: !state.paused });
+export function skipToMorning(state: GameState): GameState {
+  if (isWorkingHours(state)) return state;
+  const next = finishOrder(state, canFulfillOrder(state));
+  return { ...next, day: state.day + (state.minuteOfDay >= WORK_END ? 1 : 0),
+    minuteOfDay: WORK_START, lastTick: Date.now() };
+}
+
+export type GameState = { day: number; minuteOfDay: number; paused: boolean; shelterCapacity: number; warehouseCapacity: Record<Resource, number>; laborEventIn: number; laborSequence: number; laborNotices: LaborNotice[]; version: number; orderQuantities: Record<Resource, number>; consumptionIn: number; shortage: boolean; order: Order | null; orderIn: number; orderSequence: number; lastOrder: OrderResult | null; seed: number; money: number; level: LevelId; selectedWorker: string | null; workers: Worker[]; stock: Record<Exclude<Job, "idle">, number>; ledger: LedgerItem[]; lastTick: number };
 
 export const levelInfo: Record<LevelId, { title: string; subtitle: string; unlock: number; price: number; job: Exclude<Job, "idle">; icon: string; color: string; description: string }> = {
   1: { title: "Kayıp Orman", subtitle: "İlk kaynak: kes, taşı, sat", unlock: 0, price: 1, job: "wood", icon: "🪵", color: "amber", description: "Kuru ağaçlar ve eski kereste stoklarıyla yerleşimin ilk gelirini kur." },
@@ -45,14 +58,15 @@ export function changeWorkers(state: GameState, job: Resource, delta: 1 | -1): G
   return worker ? assignJob(state, worker.id, delta === 1 ? job : "idle") : state;
 }
 
-const initialState = (): GameState => ({ version: 9, shelterCapacity: 3, warehouseCapacity: Object.fromEntries(resources.map(resource => [resource, 100])) as Record<Resource, number>, laborEventIn: 240 + Math.floor(Math.random() * 241), laborSequence: 0, laborNotices: [], orderQuantities: zeroStock(), consumptionIn: 30, shortage: false, order: null, orderIn: FIRST_ORDER_DELAY, orderSequence: 0, lastOrder: null, seed: Date.now() >>> 0, money: 0, level: 1, selectedWorker: null, workers: [{ id: "w1", name: "", role: "Toplayıcı", job: "idle", progress: 0 }, { id: "w2", name: "", role: "Taşıyıcı", job: "idle", progress: 0 }, { id: "w3", name: "", role: "Usta", job: "idle", progress: 0 }], stock: zeroStock(), ledger: [{ id: 1, text: "Üç işçi kampın başında bekliyor.", tone: "system" }], lastTick: Date.now() });
+const initialState = (): GameState => ({ version: 10, day: 1, minuteOfDay: WORK_START, paused: false, shelterCapacity: 3, warehouseCapacity: Object.fromEntries(resources.map(resource => [resource, 100])) as Record<Resource, number>, laborEventIn: 240 + Math.floor(Math.random() * 241), laborSequence: 0, laborNotices: [], orderQuantities: zeroStock(), consumptionIn: 30, shortage: false, order: null, orderIn: FIRST_ORDER_DELAY, orderSequence: 0, lastOrder: null, seed: Date.now() >>> 0, money: 0, level: 1, selectedWorker: null, workers: [{ id: "w1", name: "", role: "Toplayıcı", job: "idle", progress: 0 }, { id: "w2", name: "", role: "Taşıyıcı", job: "idle", progress: 0 }, { id: "w3", name: "", role: "Usta", job: "idle", progress: 0 }], stock: zeroStock(), ledger: [{ id: 1, text: "Üç işçi kampın başında bekliyor.", tone: "system" }], lastTick: Date.now() });
 export const emptyState = (): GameState => initialState();
 export function addLedger(state: GameState, text: string, tone: LedgerItem["tone"] = "system"): GameState { return { ...state, ledger: [{ id: (state.ledger[0]?.id ?? 0) + 1, text, tone }, ...state.ledger].slice(0, 8) }; }
 export function assignJob(state: GameState, workerId: string, job: Job): GameState { const worker = state.workers.find((item) => item.id === workerId); if (!worker || worker.strikeRemaining || (job !== "idle" && (!isHoused(state, workerId) || !resources.includes(job) || state.level < resourceLevel[job]))) return state; const next = { ...state, workers: state.workers.map((item) => item.id === workerId ? { ...item, job, progress: 0 } : item) }; const label = job === "idle" ? "boşa alındı" : `${levelInfo[resourceLevel[job]].title} görevine gönderildi`; return addLedger(next, `Bir işçi ${label}.`, job === "idle" ? "system" : job); }
 export function simulateTick(state: GameState): GameState {
+  if (state.paused) return state;
   const stock = { ...state.stock };
   const workers = state.workers.map(worker => {
-    if (!isHoused(state, worker.id) || worker.job === "idle" || worker.strikeRemaining ||
+    if (!isWorkingHours(state) || !isHoused(state, worker.id) || worker.job === "idle" || worker.strikeRemaining ||
       stock[worker.job] >= state.warehouseCapacity[worker.job]) return worker;
     const progress = worker.progress + (state.shortage ? 10 : 20);
     if (progress < 100) return { ...worker, progress };
@@ -60,7 +74,9 @@ export function simulateTick(state: GameState): GameState {
     stock[worker.job] += 1;
     return { ...worker, progress: 0 };
   });
-  return simulateLabor(simulateEconomy(advanceLevel({ ...state, stock, workers, lastTick: Date.now() })));
+  const elapsed = state.minuteOfDay + MINUTES_PER_TICK;
+  return simulateLabor(simulateEconomy(advanceLevel({ ...state, stock, workers,
+    minuteOfDay: elapsed % 1440, day: state.day + Math.floor(elapsed / 1440), lastTick: Date.now() })));
 }
 export function unlockLevel(state: GameState, level: LevelId): GameState { if (state.money < levelInfo[level].unlock || state.level >= level) return state; return addLedger({ ...state, level }, `Yeni ekran açıldı: ${levelInfo[level].title}.`, "system"); }
 
@@ -256,7 +272,10 @@ export function loadGame(raw: string | null): GameState {
     const orderIn = Number.isFinite(saved.orderIn) && saved.orderIn > 0
       ? (saved.version >= 9 ? saved.orderIn : Math.min(saved.orderIn, ORDER_DELAY_MAX)) : FIRST_ORDER_DELAY;
     return advanceLevel({ ...defaults, ...saved, stock, order, orderIn, orderQuantities, warehouseCapacity, shelterCapacity,
-      lastOrder: saved.lastOrder ? { penalty: 0, ...saved.lastOrder } : null, version: 9, lastTick: Date.now() });
+      lastOrder: saved.lastOrder ? { penalty: 0, ...saved.lastOrder } : null, version: 10,
+      day: Number.isSafeInteger(saved.day) && saved.day >= 1 ? saved.day : 1,
+      minuteOfDay: Number.isInteger(saved.minuteOfDay) && saved.minuteOfDay >= 0 && saved.minuteOfDay < 1440 ? saved.minuteOfDay : WORK_START,
+      paused: saved.paused === true, lastTick: Date.now() });
   } catch { return defaults; }
 }
 

@@ -1,5 +1,5 @@
 ﻿import { describe, expect, it } from "vitest";
-import { buildShelter, isHoused, shelterCost, warehouseResources, warehouseUpgradeCost, upgradeWarehouse, foodResources, foodStock, hireForJob, changeWorkers, assignJob, emptyState, levelInfo, simulateTick, hireWorker, hiringCost, fulfillOrder, loadGame, zeroStock } from "./game";
+import { skipToMorning, buildShelter, isHoused, shelterCost, warehouseResources, warehouseUpgradeCost, upgradeWarehouse, foodResources, foodStock, hireForJob, changeWorkers, assignJob, emptyState, levelInfo, simulateTick, hireWorker, hiringCost, fulfillOrder, loadGame, zeroStock } from "./game";
 
 describe("işçi üretim döngüsü", () => {
   it("üretim stok oluşturur ama para kazandırmaz", () => {
@@ -460,4 +460,79 @@ it("sustains repeated order income with the starter crew and food consumption", 
     expect(state.money).toBeGreaterThan(0);
     expect(state.money).toBeLessThanOrEqual(earned);
   }
+});
+
+
+describe("game clock and pause", () => {
+  it("works from 08:00 inclusive until 20:00 exclusive, preserving overnight progress", () => {
+    const base = assignJob(emptyState(), "w1", "wood");
+    let state = simulateTick({ ...base, minuteOfDay: 479 });
+    expect(state.minuteOfDay).toBe(480);
+    expect(state.workers[0].progress).toBe(0);
+    state = simulateTick(state);
+    expect(state.workers[0].progress).toBe(20);
+    state = simulateTick({ ...state, minuteOfDay: 1199 });
+    expect(state.minuteOfDay).toBe(1200);
+    expect(state.workers[0].progress).toBe(40);
+    const night = simulateTick(state);
+    expect(night.workers).toEqual(state.workers);
+    expect(night.stock).toEqual(state.stock);
+    expect(night.consumptionIn).toBe(state.consumptionIn - 1);
+    expect(simulateTick({ ...night, minuteOfDay: 480 }).workers[0].progress).toBe(60);
+  });
+  it("rolls into the next day and freezes every timer while paused", () => {
+    const base = { ...ordered(), day: 7, minuteOfDay: 1439 };
+    const next = simulateTick(base);
+    expect(next.day).toBe(8);
+    expect(next.minuteOfDay).toBe(0);
+    const paused = { ...base, paused: true };
+    expect(simulateTick(paused)).toBe(paused);
+  });
+  it("migrates old saves and validates and persists clock state", () => {
+    const base = { ...emptyState(), money: 12, day: 4, minuteOfDay: 1300, paused: true };
+    const loaded = loadGame(JSON.stringify(base));
+    expect(loaded.day).toBe(4);
+    expect(loaded.minuteOfDay).toBe(1300);
+    expect(loaded.paused).toBe(true);
+    for (const clock of [{ day: undefined, minuteOfDay: undefined, paused: undefined }, { day: -1, minuteOfDay: 1440, paused: "true" }]) {
+      const migrated = loadGame(JSON.stringify({ ...base, ...clock }));
+      expect(migrated.day).toBe(1);
+      expect(migrated.minuteOfDay).toBe(480);
+      expect(migrated.paused).toBe(false);
+      expect(migrated.money).toBe(12);
+    }
+  });
+});
+
+
+it("skips nights to the upcoming 08:00 without consuming resources or timers", () => {
+  const daytime = emptyState();
+  expect(skipToMorning(daytime)).toBe(daytime);
+  expect(skipToMorning({ ...daytime, minuteOfDay: 1199 }).minuteOfDay).toBe(1199);
+  for (const minuteOfDay of [1200, 1439, 0, 479]) {
+    const state = { ...emptyState(), day: 3, minuteOfDay, paused: true };
+    const next = skipToMorning(state);
+    expect(next).toEqual({ ...state, minuteOfDay: 480, day: minuteOfDay >= 1200 ? 4 : 3, lastTick: next.lastTick });
+    expect(skipToMorning(next)).toBe(next);
+  }
+});
+
+
+it.each([true, false])("resolves the open order exactly once on next day (enough stock: %s)", (enough) => {
+  const base = ordered();
+  const state = { ...base, minuteOfDay: 1200, paused: true,
+    stock: { ...base.stock, wood: enough ? 20 : 19 } };
+  const next = skipToMorning(state);
+  expect(next.order).toBeNull();
+  expect(next.lastOrder).toEqual({ id: 1, success: enough, reward: enough ? 74 : 0, penalty: enough ? 0 : 37 });
+  expect(next.money).toBe(enough ? 74 : -37);
+  expect(next.stock).toEqual(enough ? zeroStock() : state.stock);
+  expect(next.minuteOfDay).toBe(480);
+  expect(next.day).toBe(2);
+  expect(next.paused).toBe(true);
+  expect(next.consumptionIn).toBe(state.consumptionIn);
+  expect(next.laborEventIn).toBe(state.laborEventIn);
+  expect(next.orderIn).toBe(state.orderIn);
+  expect(skipToMorning(next)).toBe(next);
+  expect(fulfillOrder(next)).toBe(next);
 });
