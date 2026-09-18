@@ -46,7 +46,7 @@ const render = async (state?: g.GameState) => {
 };
 it("browses categories, buys a site and equipment, assigns staff and persists production", async () => {
   await render();
-  expect(container.querySelectorAll(".category-card")).toHaveLength(4);
+  expect(container.querySelectorAll(".category-card")).toHaveLength(5);
   await click("Orman");
   expect(container.querySelectorAll(".production-card")).toHaveLength(2);
   await click("Oduncu");
@@ -318,4 +318,23 @@ it("centralizes management and only hires from assignment after idle workers run
   await click("− İşçi çıkart");
   expect(button("+ İşçi ata").disabled).toBe(false);
   expect(button("İşçi al + ata")).toBeUndefined();
+});
+
+it("builds a hospital, hires doctors and buys requested supplies", async () => {
+  await render({ ...g.emptyState(), money: 1000 });
+  await click("Hastane");
+  await click("Hastaneyi kur");
+  await click("Doktor al");
+  expect(saved().hospital.doctors).toBe(1);
+  expect(g.doctorCapacity(saved())).toBe(2);
+  await click("İğne al");
+  await click("Ağrı kesici al");
+  await click("Antibiyotik al");
+  expect(saved().hospital.supplies).toEqual({
+    syringe: 1,
+    painkiller: 1,
+    antibiotic: 1,
+  });
+  await click("Hastaneyi yükselt");
+  expect(g.doctorCapacity(saved())).toBe(4);
 });

@@ -5,6 +5,7 @@ type Props = {
   act: (fn: (state: g.GameState) => g.GameState) => void;
 };
 const people: Record<g.Category, { name: string; avatar: string }> = {
+  hospital: { name: "Selin", avatar: "👩‍⚕️" },
   forest: { name: "Deniz", avatar: "🧑🏽‍🌾" },
   farm: { name: "Zeynep", avatar: "👩🏻‍🌾" },
   livestock: { name: "Elif", avatar: "👩🏽‍🌾" },
@@ -39,6 +40,19 @@ export function CategorySummary({
   state: g.GameState;
   category: g.Category;
 }) {
+  if (category === "hospital")
+    return (
+      <span className="category-summary">
+        <span>
+          Seviye {state.hospital.level} · {state.hospital.doctors}/
+          {g.doctorCapacity(state)} doktor
+        </span>
+        <span>
+          {state.workers.filter((w) => w.illnessRemaining).length} hasta ?{" "}
+          {state.hospital.doctors * 2} tedavi kapasitesi
+        </span>
+      </span>
+    );
   const definitions = g.siteDefinitions.filter((s) => s.category === category);
   const owned = definitions.filter((s) => state.sites[s.id]);
   const products = [...new Set(definitions.flatMap(g.siteProducts))];
@@ -304,13 +318,18 @@ export function AssistantDock({
               ×
             </button>
           </div>
-          <p>
-            Merhaba! {category.name.toLocaleLowerCase("tr-TR")} sahalarını takip
-            ediyorum.{" "}
-            {requests.length || shortages.length
-              ? "Ekibimizin ihtiyaçlarını aşağıda topladım."
-              : "Şu an bekleyen malzeme ihtiyacımız yok."}
-          </p>
+          {selected === "hospital" && (
+            <HospitalSupplies state={state} act={act} />
+          )}
+          {selected !== "hospital" && (
+            <p>
+              Merhaba! {category.name.toLocaleLowerCase("tr-TR")} sahalarını
+              takip ediyorum.{" "}
+              {requests.length || shortages.length
+                ? "Ekibimizin ihtiyaçlarını aşağıda topladım."
+                : "Şu an bekleyen malzeme ihtiyacımız yok."}
+            </p>
+          )}
           {requests.map((r) => (
             <div className="manager-request" key={`${r.site.id}-${r.type}`}>
               <span>
@@ -346,18 +365,20 @@ export function AssistantDock({
                 {s.name} · {g.productionStatus(state, s)} →
               </button>
             ))}
-          {!g.siteDefinitions.some(
-            (s) => s.category === selected && state.sites[s.id],
-          ) && (
-            <p>
-              İlk sahamızı kurduğunda ekipman ihtiyaçlarını sana bildireceğim.
-            </p>
-          )}
+          {selected !== "hospital" &&
+            !g.siteDefinitions.some(
+              (s) => s.category === selected && state.sites[s.id],
+            ) && (
+              <p>
+                İlk sahamızı kurduğunda ekipman ihtiyaçlarını sana bildireceğim.
+              </p>
+            )}
         </section>
       )}
       <div className="assistant-launchers">
         {g.categories.map((c) => {
           const count =
+            (c.id === "hospital" ? g.hospitalRequests(state).length : 0) +
             g.managerRequests(state, c.id).length +
             categoryNeeds(state, c.id).length;
           return (
@@ -379,5 +400,83 @@ export function AssistantDock({
         })}
       </div>
     </aside>
+  );
+}
+
+export function HospitalSupplies({ state, act }: Props) {
+  const requests = g.hospitalRequests(state);
+  return (
+    <div>
+      <h3>Hastane Müdürü · Malzeme talepleri</h3>
+      <p>
+        Her tedavi başlangıcında 1 iğne, 1 ağrı kesici ve 1 antibiyotik
+        kullanılır. Malzeme veya doktor bekleyen işçi kendiliğinden iyileşmeye
+        devam eder.
+      </p>
+      {requests.length === 0 && <p>Bekleyen malzeme talebi yok.</p>}
+      {g.supplyTypes.map((type) => (
+        <div className="manager-request" key={type}>
+          <span>
+            {g.medicalSupplies[type].name}: {state.hospital.supplies[type]} stok
+            · {requests.find((r) => r.type === type)?.count ?? 0} adet gerekli
+          </span>
+          <button
+            disabled={
+              !state.hospital.level ||
+              state.money < g.medicalSupplies[type].price
+            }
+            onClick={() => act((s) => g.buyMedicalSupply(s, type))}
+          >
+            {g.medicalSupplies[type].name} al · {g.medicalSupplies[type].price}₺
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+export function HospitalPanel({ state, act }: Props) {
+  const patients = state.workers.filter((w) => w.illnessRemaining);
+  return (
+    <section className="panel hospital-panel">
+      <span className="eyebrow">SAĞLIK MERKEZİ</span>
+      <h2>Hastane · Seviye {state.hospital.level}</h2>
+      <p>
+        {state.hospital.doctors} / {g.doctorCapacity(state)} doktor ·{" "}
+        {state.hospital.doctors * 2} hasta kapasitesi. Her seviye +2 doktor
+        kapasitesi sağlar.
+      </p>
+      <button
+        disabled={
+          state.hospital.level >= 20 ||
+          state.money < g.hospitalUpgradeCost(state)
+        }
+        onClick={() => act(g.upgradeHospital)}
+      >
+        {state.hospital.level === 0 ? "Hastaneyi kur" : "Hastaneyi yükselt"} ·{" "}
+        {g.hospitalUpgradeCost(state)}₺
+      </button>{" "}
+      <button
+        disabled={
+          state.hospital.doctors >= g.doctorCapacity(state) || state.money < 50
+        }
+        onClick={() => act(g.hireDoctor)}
+      >
+        Doktor al · 50₺
+      </button>
+      <h3>Hastalar · {patients.length}</h3>
+      <p>
+        İyileşme: 10 gerçek dakika; kesintisiz tedavi: 5 gerçek dakika. Hastalık
+        başına %1 ölüm riski vardır. Tedavi gün boyu sürer; duraklatıldığında
+        sayaçlar durur.
+      </p>
+      {patients.length === 0 && <p>Hasta işçi yok.</p>}
+      {patients.map((w) => (
+        <p key={w.id}>
+          {g.workerLabel(w)} · {w.treatment ? "Tedavi oluyor" : "Tedavi bekliyor"} ·{" "}
+          {Math.ceil(w.illnessRemaining! / (w.treatment ? 2 : 1))} sn kaldı
+        </p>
+      ))}
+      <HospitalSupplies state={state} act={act} />
+    </section>
   );
 }

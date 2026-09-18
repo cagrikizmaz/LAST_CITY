@@ -2,6 +2,7 @@
 import * as g from "./game";
 import {
   AssistantDock,
+  HospitalPanel,
   CategorySummary,
   EquipmentPurchase,
   ProductControls,
@@ -43,7 +44,7 @@ export function App() {
     : [];
   const idleWorkers = state.workers.filter((w) => w.job === "idle");
   const availableWorker = idleWorkers.some(
-    (w) => !w.strikeRemaining && g.isHoused(state, w.id),
+    (w) => !w.illnessRemaining && g.isHoused(state, w.id),
   );
   const housedWorkers = state.workers.filter((w) =>
     g.isHoused(state, w.id),
@@ -213,7 +214,8 @@ export function App() {
               </p>
             </>
           )}
-          {category && !definition && (
+          {category === "hospital" && <HospitalPanel state={state} act={act} />}
+          {category && category !== "hospital" && !definition && (
             <div className="production-grid">
               {g.siteDefinitions
                 .filter((s) => s.category === category)
@@ -324,7 +326,7 @@ export function App() {
                 </p>
                 <div className="staff-controls">
                   <button
-                    disabled={!assigned.some((w) => !w.strikeRemaining)}
+                    disabled={!assigned.some((w) => !w.illnessRemaining)}
                     onClick={() =>
                       act((s) => g.changeWorkers(s, definition.job, -1))
                     }
@@ -353,7 +355,7 @@ export function App() {
                     : idleWorkers.length > 0
                       ? availableWorker
                         ? "Boştaki işçi ek ücret olmadan atanır."
-                        : "Boştaki işçi için barınak gerekli veya grevin bitmesi bekleniyor."
+                        : "Boştaki işçi için barınak gerekli veya iyileşmesi bekleniyor."
                       : state.workers.length >= state.shelterCapacity
                         ? "Yeni işçi için yönetim alanından barınak ekle."
                         : state.money < g.hiringCost(state)
@@ -364,7 +366,7 @@ export function App() {
                 </p>
                 <p>
                   {g.equippedCapacity(state, definition)} tam ekipman seti ·{" "}
-                  {assigned.filter((w) => w.strikeRemaining).length} grevde ·{" "}
+                  {assigned.filter((w) => w.illnessRemaining).length} hasta ·{" "}
                   {assigned.filter((w) => !g.isHoused(state, w.id)).length}{" "}
                   barınaksız
                 </p>
@@ -554,10 +556,7 @@ export function App() {
               </p>
             )}
           </section>
-          <section
-            className="panel site-warehouse"
-            aria-label="Şehir yönetimi"
-          >
+          <section className="panel site-warehouse" aria-label="Şehir yönetimi">
             <span className="eyebrow">ŞEHİR YÖNETİMİ</span>
             <h2>Yönetim</h2>
             <div className="management-summary">
@@ -578,9 +577,9 @@ export function App() {
                   <dd>{idleWorkers.length}</dd>
                 </div>
                 <div>
-                  <dt>Grevde</dt>
+                  <dt>Hasta</dt>
                   <dd>
-                    {state.workers.filter((w) => w.strikeRemaining).length}
+                    {state.workers.filter((w) => w.illnessRemaining).length}
                   </dd>
                 </div>
               </dl>

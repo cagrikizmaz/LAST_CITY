@@ -46,10 +46,12 @@ Hammadde gerektirmeyen ürünler, ekipmanlı işçi ve depoda yer oldukça süre
 
 Gelir sipariş teslimatından gelir; üretim doğrudan para kazandırmaz. Siparişler yalnızca satın alınmış sahaların ürünlerini ister. İlk saha alınmadan sipariş oluşmaz. Sipariş süresi bittiğinde stok yeterliyse teslim edilir, eksikse ödülün yarısı ceza kesilir. Yeni siparişler 15–25 saniye arayla gelir.
 
-İşçiler 08:00–20:00 arasında çalışır. Her gerçek saniye bir oyun dakikasıdır. Duraklatma tüm simülasyon sayaçlarını durdurur. Mesai dışında sabaha geçilebilir; açık sipariş sonuçlandırılır ve gün değişiyorsa günlük ücret ödenir. Ücret kişi başına güncel işe alım maliyetinin %10'udur. Grev, istifa ve barınak kuralları korunur; barınaksız işçiler çalışamaz.
+İşçiler 08:00–20:00 arasında çalışır. Her gerçek saniye bir oyun dakikasıdır. Duraklatma tüm simülasyon sayaçlarını durdurur. Mesai dışında sabaha geçilebilir; açık sipariş sonuçlandırılır ve gün değişiyorsa günlük ücret ödenir. Ücret kişi başına güncel işe alım maliyetinin %10'udur. Hastalık, ekipmansızlık nedeniyle istifa ve barınak kuralları uygulanır; barınaksız işçiler çalışamaz.
 
 ## Kayıt ve doğrulama
 
 Oyun `last-city-workers-v2` anahtarıyla tarayıcıya kaydedilir; çevrimdışı üretim yoktur. Yeni oyun kaydı sıfırlar. Eski kayıtlardaki para, stok ve işçiler korunur; yeni katalogda karşılığı olan açılmış sahalar ve başlangıç ekipmanları aktarılır. Katalogda karşılığı olmayan görevlerin işçileri boşa alınır; eski ürün stokları korunur.
 
 `npm test` oyun kuralları ve DOM üzerinden kullanıcı akışlarını, `npm run build` TypeScript ve üretim derlemesini doğrular. ESLint yapılandırması henüz bulunmaz.
+
+Hastane ana kategoridedir. İlk seviye 2 doktor kapasitesi verir; her seviye +2 kapasite ekler. Doktor 50₺ karşılığında alınır ve 2 hastaya bakar. Hastalık 600 saniye, kesintisiz tedavi 300 saniye sürer. Her tedavi 1 iğne, 1 ağrı kesici ve 1 antibiyotik tüketir; eksikleri hastane müdürü bildirir. Hastalık başına ölüm olasılığı %1’dir. Ekipmansız geçirilen 600 mesai saniyesi istifaya yol açar; ekipman sağlanınca sayaç sıfırlanır. Dinlenme ve hastalık süreleri istifa sayacını ilerletmez. Sabaha geçmek gerçek süre sayaçlarını ilerletmez.

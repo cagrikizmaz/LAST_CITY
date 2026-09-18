@@ -29,6 +29,7 @@ describe("categories and purchases", () => {
   });
   it("has the requested sites and categories", () => {
     expect(g.categories.map((c) => c.name)).toEqual([
+      "Hastane",
       "Orman",
       "Tarım",
       "Hayvancılık",
@@ -427,14 +428,14 @@ describe("economy, clock and labor regression", () => {
     const poor = { ...state, money: 0 };
     expect(g.hireWorker(poor)).toBe(poor);
   });
-  it("stops strikers and resumes when their strike ends", () => {
+  it("stops sick workers and resumes when they recover", () => {
     const state = ready();
-    const striking = {
+    const sick = {
       ...state,
-      workers: state.workers.map((w) => ({ ...w, strikeRemaining: 5 })),
+      workers: state.workers.map((w) => ({ ...w, illnessRemaining: 5 })),
     };
-    expect(ticks(striking).stock.wood).toBe(0);
-    const resumed = ticks(striking, 10);
+    expect(ticks(sick).stock.wood).toBe(0);
+    const resumed = ticks(sick, 10);
     expect(resumed.stock.wood).toBe(1);
     expect(resumed.laborNotices.length).toBeGreaterThan(0);
   });
@@ -586,20 +587,139 @@ describe("independent production lines", () => {
   });
 });
 
-it("uses idle workers before hiring and does not hire around housing or strike restrictions", () => {
+it("uses idle workers before hiring and does not hire around housing or illness restrictions", () => {
   const state = g.purchaseSite(g.emptyState(), "lumber");
   const next = g.hireForJob(state, "wood");
   expect(next.workers).toHaveLength(3);
   expect(next.workers[0].job).toBe("wood");
   expect(next.money).toBe(state.money);
-  const striking = {
+  const sick = {
     ...state,
-    workers: state.workers.map((w) => ({ ...w, strikeRemaining: 10 })),
+    workers: state.workers.map((w) => ({ ...w, illnessRemaining: 10 })),
   };
-  expect(g.hireForJob(striking, "wood")).toBe(striking);
+  expect(g.hireForJob(sick, "wood")).toBe(sick);
   const full = {
     ...state,
     workers: state.workers.map((w) => ({ ...w, job: "wood" as const })),
   };
   expect(g.hireForJob(full, "wood")).toBe(full);
+});
+
+describe("hospital and labor events", () => {
+  const sick = () => {
+    const state = ready();
+    return {
+      ...state,
+      workers: state.workers.map((w) => ({ ...w, illnessRemaining: 600 })),
+    };
+  };
+  it("recovers naturally in 600 ticks and treats only two patients per doctor in 300 ticks", () => {
+    const state = sick();
+    expect(ticks(state, 599).workers[0].illnessRemaining).toBe(1);
+    expect(ticks(state, 600).workers[0].illnessRemaining).toBe(0);
+    const treated = {
+      ...state,
+      hospital: {
+        level: 1,
+        doctors: 1,
+        supplies: { syringe: 3, painkiller: 3, antibiotic: 3 },
+      },
+    };
+    const first = ticks(treated, 1);
+    expect(first.workers.map((w) => w.illnessRemaining)).toEqual([
+      598, 598, 599,
+    ]);
+    expect(first.hospital.supplies.syringe).toBe(1);
+    const recovered = ticks(treated, 300);
+    expect(recovered.workers.map((w) => w.illnessRemaining)).toEqual([
+      0, 0, 300,
+    ]);
+    expect(ticks(recovered, 150).workers[2].illnessRemaining).toBe(0);
+  });
+  it("requires all supplies and pauses health timers", () => {
+    const state = {
+      ...sick(),
+      hospital: {
+        level: 1,
+        doctors: 1,
+        supplies: { syringe: 2, painkiller: 2, antibiotic: 0 },
+      },
+    };
+    expect(ticks(state, 1).workers[0].illnessRemaining).toBe(599);
+    expect(ticks(state, 1).hospital.supplies.syringe).toBe(2);
+    const paused = { ...state, paused: true };
+    expect(g.simulateTick(paused)).toBe(paused);
+  });
+  it("resigns only after prolonged equipment shortage and resets after equipment returns", () => {
+    const state = ready();
+    const waiting = {
+      ...state,
+      equipment: [],
+      workers: state.workers.map((w) => ({ ...w, unequippedTicks: 598 })),
+    };
+    expect(ticks(waiting, 1).workers).toHaveLength(3);
+    const departed = ticks(waiting, 2);
+    expect(departed.workers).toHaveLength(2);
+    expect(departed.laborNotices[0].text).toContain("istifa");
+    expect(
+      ticks({ ...waiting, equipment: state.equipment }, 1).workers[0]
+        .unequippedTicks,
+    ).toBe(0);
+    expect(
+      ticks({ ...waiting, minuteOfDay: g.WORK_END }, 5).workers[0]
+        .unequippedTicks,
+    ).toBe(598);
+  });
+  it("removes deceased workers and preserves an empty workforce on load", () => {
+    const state = sick();
+    state.workers = [
+      { ...state.workers[0], illnessRemaining: 1, illnessFatal: true },
+    ];
+    state.selectedWorker = state.workers[0].id;
+    const next = ticks(state, 1);
+    expect(next.workers).toHaveLength(0);
+    expect(next.selectedWorker).toBeNull();
+    expect(g.loadGame(JSON.stringify(next)).workers).toHaveLength(0);
+  });
+  it("round-trips treatment and removes legacy strike state", () => {
+    const state = {
+      ...sick(),
+      hospital: {
+        level: 2,
+        doctors: 3,
+        supplies: { syringe: 4, painkiller: 5, antibiotic: 6 },
+      },
+    };
+    const next = ticks(state, 1);
+    expect(g.loadGame(JSON.stringify(next)).hospital).toEqual(next.hospital);
+    expect(g.loadGame(JSON.stringify(next)).workers).toEqual(next.workers);
+    const legacy = g.loadGame(
+      JSON.stringify({
+        ...ready(),
+        version: 12,
+        hospital: undefined,
+        workers: [{ ...ready().workers[0], strikeRemaining: 400 }],
+      }),
+    );
+    expect(legacy.workers[0]).not.toHaveProperty("strikeRemaining");
+    expect(legacy.hospital.level).toBe(0);
+  });
+});
+
+it("clears equipment warnings immediately only when the full kit is restored", () => {
+  let state = ticks({ ...ready(), equipment: [] }, 1);
+  expect(state.laborNotices.some(n => n.equipmentWorkerId === "w1")).toBe(true);
+  state = g.buyEquipment(state, "lumber", "axe");
+  expect(state.laborNotices.some(n => n.equipmentWorkerId === "w1")).toBe(true);
+  state = g.buyEquipment({ ...state, paused: true }, "lumber", "gloves");
+  expect(state.laborNotices.some(n => n.equipmentWorkerId === "w1")).toBe(false);
+  expect(state.workers[0].unequippedTicks).toBe(0);
+  expect(state.ledger.some(n => n.text.includes("ekipmansız kaldı"))).toBe(true);
+});
+it("clears resolved legacy equipment warnings on load and when unassigning", () => {
+  const state = ready();
+  const loaded = g.loadGame(JSON.stringify({ ...state, laborNotices: [{ id: 1, text: "Oduncu sahasında çalışan 1 işçi ekipmansız kaldı. 10 dakika mesai boyunca ekipman sağlanmazsa istifa edecek." }] }));
+  expect(loaded.laborNotices).toEqual([]);
+  const waiting = ticks({ ...state, equipment: [] }, 1);
+  expect(g.assignJob(waiting, "w1", "idle").laborNotices).toEqual([]);
 });

@@ -14,7 +14,10 @@ export type Worker = {
   role: string;
   job: Job;
   progress: number;
-  strikeRemaining?: number;
+  illnessRemaining?: number;
+  treatment?: boolean;
+  illnessFatal?: boolean;
+  unequippedTicks?: number;
 };
 export type LedgerItem = {
   id: number;
@@ -69,7 +72,7 @@ export const resourceLevel: Record<Resource, LevelId> = {
 export const FIRST_ORDER_DELAY = 15;
 export const ORDER_DELAY_MIN = 15;
 export const ORDER_DELAY_MAX = 25;
-export type LaborNotice = { id: number; text: string };
+export type LaborNotice = { id: number; text: string; equipmentWorkerId?: string };
 export const WORK_START = 8 * 60;
 export const WORK_END = 20 * 60;
 export const MINUTES_PER_TICK = 1;
@@ -95,6 +98,7 @@ export function skipToMorning(state: GameState): GameState {
 }
 
 export type GameState = {
+  hospital: Hospital;
   sites: Record<string, SiteState>;
   equipment: Equipment[];
   equipmentSequence: number;
@@ -246,7 +250,7 @@ export function changeWorkers(
   const worker = state.workers.find(
     (item) =>
       item.job === (delta === 1 ? "idle" : job) &&
-      !item.strikeRemaining &&
+      !item.illnessRemaining &&
       (delta === -1 || isHoused(state, item.id)),
   );
   return worker
@@ -255,7 +259,12 @@ export function changeWorkers(
 }
 
 const initialState = (): GameState => ({
-  version: 12,
+  version: 13,
+  hospital: {
+    level: 0,
+    doctors: 0,
+    supplies: { syringe: 0, painkiller: 0, antibiotic: 0 },
+  },
   sites: {},
   equipment: [],
   equipmentSequence: 0,
@@ -311,7 +320,7 @@ export function assignJob(
   const worker = state.workers.find((item) => item.id === workerId);
   if (
     !worker ||
-    worker.strikeRemaining ||
+    worker.illnessRemaining ||
     (job !== "idle" &&
       (!isHoused(state, workerId) ||
         !resources.includes(job) ||
@@ -330,7 +339,7 @@ export function assignJob(
     job === "idle"
       ? "boşa alındı"
       : `${levelInfo[resourceLevel[job]].title} görevine gönderildi`;
-  return addLedger(next, `Bir işçi ${label}.`, job === "idle" ? "system" : job);
+  return reconcileEquipmentNotices(addLedger(next, `Bir işçi ${label}.`, job === "idle" ? "system" : job));
 }
 export function simulateTick(state: GameState): GameState {
   if (state.paused) return state;
@@ -393,7 +402,7 @@ export function warehouseResources(state: GameState): Resource[] {
     );
 }
 
-// Beds go to workers in arrival order, including idle workers and strikers.
+// Beds go to workers in arrival order, including idle workers and sick workers.
 export function isHoused(state: GameState, workerId: string): boolean {
   const index = state.workers.findIndex((worker) => worker.id === workerId);
   return index >= 0 && index < state.shelterCapacity;
@@ -464,85 +473,188 @@ export function hireForJob(state: GameState, job: Resource): GameState {
   const hired = hireWorker(state);
   return hired === state ? state : assignJob(hired, hired.selectedWorker!, job);
 }
-function notifyLabor(state: GameState, text: string): GameState {
+export function workerLabel(worker: Worker): string {
+  const site = siteDefinitions.find((site) => site.job === worker.job);
+  return site ? `${site.name} sahasında çalışan 1 işçi` : "1 işçi";
+}
+function notifyLabor(state: GameState, text: string, equipmentWorkerId?: string): GameState {
   const id = state.laborSequence + 1;
   return addLedger(
     {
       ...state,
       laborSequence: id,
-      laborNotices: [{ id, text }, ...state.laborNotices].slice(0, 5),
+      laborNotices: [{ id, text, ...(equipmentWorkerId ? { equipmentWorkerId } : {}) }, ...state.laborNotices].slice(0, 5),
     },
     text,
   );
 }
-function simulateLabor(state: GameState): GameState {
-  const returning = resources.filter((job) =>
-    state.workers.some((w) => w.job === job && w.strikeRemaining === 1),
+export const ILLNESS_DURATION = 600;
+export const RESIGN_AFTER = 600;
+export const medicalSupplies = {
+  syringe: { name: "İğne", price: 3 },
+  painkiller: { name: "Ağrı kesici", price: 4 },
+  antibiotic: { name: "Antibiyotik", price: 6 },
+};
+export type MedicalSupply = keyof typeof medicalSupplies;
+export type Hospital = {
+  level: number;
+  doctors: number;
+  supplies: Record<MedicalSupply, number>;
+};
+export const supplyTypes = Object.keys(medicalSupplies) as MedicalSupply[];
+export const doctorCapacity = (state: GameState) => state.hospital.level * 2;
+export const hospitalUpgradeCost = (state: GameState) =>
+  100 * (state.hospital.level + 1);
+export function upgradeHospital(state: GameState): GameState {
+  const cost = hospitalUpgradeCost(state);
+  if (state.money < cost || state.hospital.level >= 20) return state;
+  return addLedger(
+    {
+      ...state,
+      money: state.money - cost,
+      hospital: { ...state.hospital, level: state.hospital.level + 1 },
+    },
+    "Hastane geliştirildi: +2 doktor kapasitesi.",
   );
-  let next = {
+}
+export function hireDoctor(state: GameState): GameState {
+  if (state.money < 50 || state.hospital.doctors >= doctorCapacity(state))
+    return state;
+  return addLedger(
+    {
+      ...state,
+      money: state.money - 50,
+      hospital: { ...state.hospital, doctors: state.hospital.doctors + 1 },
+    },
+    "Hastaneye doktor alındı: 2 hasta kapasitesi, −50₺.",
+  );
+}
+export function hospitalRequests(state: GameState) {
+  const waiting = state.workers.filter(
+    (w) => w.illnessRemaining && !w.treatment,
+  ).length;
+  const target = Math.max(state.hospital.doctors * 2, waiting);
+  return state.hospital.level
+    ? supplyTypes
+        .map((type) => ({
+          type,
+          count: Math.max(0, target - state.hospital.supplies[type]),
+        }))
+        .filter((r) => r.count > 0)
+    : [];
+}
+export function buyMedicalSupply(
+  state: GameState,
+  type: MedicalSupply,
+): GameState {
+  const cost = medicalSupplies[type]?.price;
+  if (!state.hospital.level || !cost || state.money < cost) return state;
+  return {
     ...state,
+    money: state.money - cost,
+    hospital: {
+      ...state.hospital,
+      supplies: {
+        ...state.hospital.supplies,
+        [type]: state.hospital.supplies[type] + 1,
+      },
+    },
+  };
+}
+function simulateLabor(state: GameState): GameState {
+  let next: GameState = {
+    ...state,
+    hospital: { ...state.hospital, supplies: { ...state.hospital.supplies } },
+    workers: state.workers.map((w) => ({ ...w })),
     laborEventIn: state.laborEventIn - 1,
-    workers: state.workers.map((w) =>
-      w.strikeRemaining ? { ...w, strikeRemaining: w.strikeRemaining - 1 } : w,
-    ),
   };
-  for (const job of returning)
-    next = notifyLabor(
-      next,
-      `${levelInfo[resourceLevel[job]].title}: grev bitti, işçiler üretime döndü.`,
-    );
-  if (next.laborEventIn > 0) return next;
-  let seed = next.seed;
-  const random = (min: number, max: number) => {
+  let seed = state.seed;
+  const random = (max: number) => {
     seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
-    return min + Math.floor((seed / 4294967296) * (max - min + 1));
+    return Math.floor((seed / 4294967296) * max);
   };
-  const interval = random(240, 480);
-  const jobs = resources.filter((job) =>
-    next.workers.some(
-      (w) => w.job === job && !w.strikeRemaining && isHoused(next, w.id),
-    ),
+  let beds = Math.max(
+    0,
+    next.hospital.doctors * 2 -
+      next.workers.filter((w) => w.illnessRemaining && w.treatment).length,
   );
-  if (!jobs.length) return { ...next, seed, laborEventIn: interval };
-  const job = jobs[random(0, jobs.length - 1)];
-  const candidates = next.workers.filter(
-    (w) => w.job === job && !w.strikeRemaining && isHoused(next, w.id),
-  );
-  const strike = random(0, 1) === 1;
-  // Keep one employee so resignations alone cannot permanently stop the city.
-  const count = strike
-    ? candidates.length
-    : random(
-        1,
-        Math.min(2, candidates.length, Math.max(1, next.workers.length - 1)),
-      );
-  next = { ...next, seed, laborEventIn: interval };
-  if (!strike && next.workers.length <= 1) return next;
-  const affected = new Set(candidates.slice(0, count).map((w) => w.id));
-  const title = levelInfo[resourceLevel[job]].title;
-  if (strike) {
-    next = {
-      ...next,
-      workers: next.workers.map((w) =>
-        affected.has(w.id) ? { ...w, strikeRemaining: 600 } : w,
-      ),
-    };
-    return notifyLabor(
-      next,
-      `${title}: ${count} işçi 10 dakikalık greve başladı. Üretimi sürdürmek için yeni işçi alıp atayabilirsin.`,
+  const departed = new Set<string>();
+  for (const worker of next.workers) {
+    if (!worker.illnessRemaining) continue;
+    if (
+      !worker.treatment &&
+      beds > 0 &&
+      supplyTypes.every((t) => next.hospital.supplies[t] > 0)
+    ) {
+      supplyTypes.forEach((t) => next.hospital.supplies[t]--);
+      worker.treatment = true;
+      beds--;
+    }
+    worker.illnessRemaining = Math.max(
+      0,
+      worker.illnessRemaining - (worker.treatment ? 2 : 1),
     );
+    if (!worker.illnessRemaining) {
+      if (worker.illnessFatal) {
+        departed.add(worker.id);
+        next = notifyLabor(
+          next,
+          `${workerLabel(worker)} hastalık nedeniyle hayatını kaybetti.`,
+        );
+      } else
+        next = notifyLabor(
+          next,
+          `${workerLabel(worker)} iyileşti, yeniden çalışabilir.`,
+        );
+      worker.treatment = false;
+      worker.illnessFatal = false;
+    }
   }
-  next = {
-    ...next,
-    workers: next.workers.filter((w) => !affected.has(w.id)),
-    selectedWorker: affected.has(next.selectedWorker ?? "")
-      ? null
-      : next.selectedWorker,
-  };
-  return notifyLabor(
-    next,
-    `${title}: ${count} kişi istifa etti. Yerlerine yeni işçi almak ücretli.`,
-  );
+  if (isWorkingHours(state))
+    for (const site of siteDefinitions) {
+      const crew = next.workers.filter(
+        (w) =>
+          w.job === site.job &&
+          !w.illnessRemaining &&
+          !departed.has(w.id) &&
+          isHoused(next, w.id),
+      );
+      const equipped = equippedCapacity(next, site);
+      crew.forEach((worker, index) => {
+        worker.unequippedTicks =
+          index < equipped ? 0 : (worker.unequippedTicks ?? 0) + 1;
+        if (worker.unequippedTicks === 1)
+          next = notifyLabor(
+            next,
+            `${workerLabel(worker)} ekipmansız kaldı. 10 dakika mesai boyunca ekipman sağlanmazsa istifa edecek.`,
+            worker.id,
+          );
+        if (worker.unequippedTicks >= RESIGN_AFTER) {
+          departed.add(worker.id);
+          next = notifyLabor(
+            next,
+            `${workerLabel(worker)} uzun süre ekipmansız kaldığı için istifa etti.`,
+          );
+        }
+      });
+    }
+  next.workers = next.workers.filter((w) => !departed.has(w.id));
+  if (departed.has(next.selectedWorker ?? "")) next.selectedWorker = null;
+  if (next.laborEventIn <= 0) {
+    next.laborEventIn = 240 + random(241);
+    const candidates = next.workers.filter((w) => !w.illnessRemaining);
+    if (candidates.length) {
+      const worker = candidates[random(candidates.length)];
+      worker.illnessRemaining = ILLNESS_DURATION;
+      worker.treatment = false;
+      worker.illnessFatal = random(100) === 0;
+      next = notifyLabor(
+        next,
+        `${workerLabel(worker)} hastalandı. İyileşme 10 dakika, tedaviyle 5 dakika.`,
+      );
+    }
+  }
+  return reconcileEquipmentNotices({ ...next, seed });
 }
 
 export function canFulfillOrder(state: GameState): boolean {
@@ -609,7 +721,7 @@ function simulateEconomy(state: GameState): GameState {
       if (!available.length) return { ...next, orderIn: FIRST_ORDER_DELAY };
       const crew = Math.max(
         1,
-        next.workers.filter((w) => isHoused(next, w.id) && !w.strikeRemaining)
+        next.workers.filter((w) => isHoused(next, w.id) && !w.illnessRemaining)
           .length,
       );
       const count = random(
@@ -723,7 +835,6 @@ export function loadGame(raw: string | null): GameState {
     if (
       !saved ||
       !Array.isArray(saved.workers) ||
-      !saved.workers.length ||
       !saved.stock ||
       !resources.every(
         (resource) =>
@@ -771,6 +882,20 @@ export function loadGame(raw: string | null): GameState {
       {
         ...defaults,
         ...saved,
+        laborNotices: (saved.laborNotices ?? defaults.laborNotices).map(
+          (notice: LaborNotice) => ({ ...notice, text: notice.text.replace(/^w\d+:\s*/, "1 işçi ") }),
+        ),
+        ledger: (saved.ledger ?? defaults.ledger).map(
+          (item: LedgerItem) => ({ ...item, text: item.text.replace(/^w\d+:\s*/, "1 işçi ") }),
+        ),
+        workers: saved.workers.map(
+          (w: Worker & { strikeRemaining?: number }) => {
+            const { strikeRemaining: removed, ...worker } = w;
+            void removed;
+            return worker;
+          },
+        ),
+        hospital: normalizeHospital(saved.hospital),
         stock,
         order,
         orderIn,
@@ -778,7 +903,7 @@ export function loadGame(raw: string | null): GameState {
         warehouseCapacity,
         shelterCapacity,
         lastOrder: saved.lastOrder ? { penalty: 0, ...saved.lastOrder } : null,
-        version: 12,
+        version: 13,
         day: Number.isSafeInteger(saved.day) && saved.day >= 1 ? saved.day : 1,
         minuteOfDay:
           Number.isInteger(saved.minuteOfDay) &&
@@ -798,13 +923,28 @@ export function loadGame(raw: string | null): GameState {
   }
 }
 
-export type Category = "forest" | "farm" | "livestock" | "mine";
+function normalizeHospital(value: Partial<Hospital> | undefined): Hospital {
+  const integer = (n: unknown, max: number) =>
+    typeof n === "number" && Number.isSafeInteger(n)
+      ? Math.max(0, Math.min(max, n))
+      : 0;
+  const level = integer(value?.level, 20);
+  return {
+    level,
+    doctors: integer(value?.doctors, level * 2),
+    supplies: Object.fromEntries(
+      supplyTypes.map((t) => [t, integer(value?.supplies?.[t], 1000000)]),
+    ) as Record<MedicalSupply, number>,
+  };
+}
+export type Category = "forest" | "farm" | "livestock" | "mine" | "hospital";
 export const categories: {
   id: Category;
   name: string;
   icon: string;
   manager: string;
 }[] = [
+  { id: "hospital", name: "Hastane", icon: "🏥", manager: "Hastane Müdürü" },
   { id: "forest", name: "Orman", icon: "🌲", manager: "Orman Müdürü" },
   { id: "farm", name: "Tarım", icon: "🌾", manager: "Tarım Müdürü" },
   {
@@ -1037,7 +1177,7 @@ export function buyEquipment(
     state.money < equipmentTypes[type].price
   )
     return state;
-  return {
+  return reconcileEquipmentNotices({
     ...state,
     money: state.money - equipmentTypes[type].price,
     equipmentSequence: state.equipmentSequence + 1,
@@ -1051,6 +1191,25 @@ export function buyEquipment(
         durability: 100,
       },
     ],
+  });
+}
+// Equipment warnings describe current needs; the ledger retains event history.
+export function reconcileEquipmentNotices(state: GameState): GameState {
+  const missing = new Set<string>();
+  for (const site of siteDefinitions) {
+    const crew = state.workers.filter(w => w.job === site.job && !w.illnessRemaining && isHoused(state, w.id));
+    crew.slice(equippedCapacity(state, site)).forEach(w => missing.add(w.id));
+  }
+  return {
+    ...state,
+    workers: state.workers.map(w => !w.illnessRemaining && isHoused(state, w.id) && !missing.has(w.id) && w.unequippedTicks ? { ...w, unequippedTicks: 0 } : w),
+    laborNotices: state.laborNotices.filter(notice => {
+      if (notice.equipmentWorkerId) return missing.has(notice.equipmentWorkerId);
+      if (!notice.text.includes("ekipmansız kaldı.")) return true;
+      // Older saves have unstructured notices. Resolve their site where possible.
+      const site = siteDefinitions.find(s => notice.text.startsWith(`${s.name} sahasında`));
+      return state.workers.some(w => missing.has(w.id) && (!site || w.job === site.job));
+    }),
   };
 }
 export const equipmentUpgradeCost = (item: Equipment): number =>
@@ -1229,7 +1388,7 @@ export function productionStatus(
   if (!equippedCapacity(state, site)) return "Ekipman gerekli";
   if (
     !state.workers.some(
-      (w) => w.job === site.job && !w.strikeRemaining && isHoused(state, w.id),
+      (w) => w.job === site.job && !w.illnessRemaining && isHoused(state, w.id),
     )
   )
     return "Çalışabilir işçi gerekli";
@@ -1264,7 +1423,7 @@ export function productProductionStatus(
       !state.workers.some(
         (w) =>
           w.job === definition.job &&
-          !w.strikeRemaining &&
+          !w.illnessRemaining &&
           isHoused(state, w.id),
       )
     )
@@ -1302,7 +1461,7 @@ function produce(state: GameState): GameState {
       .filter(
         (w) =>
           w.job === definition.job &&
-          !w.strikeRemaining &&
+          !w.illnessRemaining &&
           isHoused(next, w.id),
       )
       .slice(0, workerCapacity(site));
@@ -1444,5 +1603,5 @@ function migrateSites(state: GameState, saved: Partial<GameState>): GameState {
         : { ...w, job: "idle", progress: 0 },
     ),
   };
-  return next;
+  return reconcileEquipmentNotices(next);
 }
