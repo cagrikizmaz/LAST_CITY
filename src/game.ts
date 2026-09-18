@@ -25,7 +25,26 @@ export type LedgerItem = {
   tone: Resource | "system";
 };
 export type Resource = Exclude<Job, "idle">;
+export const merchants = [
+  "Tüccar Leyla",
+  "Tüccar Kemal",
+  "Tüccar Asya",
+] as const;
+export const EARLY_BONUS = 0.2;
+export const LATE_GRACE = 30;
+export type OrderDifficulty = "easy" | "medium" | "hard";
+export const orderDifficultyNames = {
+  easy: "Kolay",
+  medium: "Orta",
+  hard: "Zor",
+};
+export const dailyOrderMinimum = (day: number) =>
+  12 + Math.min(18, Math.floor((day - 1) / 2) * 2);
 export type Order = {
+  difficulty?: OrderDifficulty;
+  dayLevel?: number;
+  challenge?: boolean;
+  merchantId: number;
   id: number;
   needs: Record<Resource, number>;
   reward: number;
@@ -34,6 +53,8 @@ export type Order = {
 };
 export type OrderResult = {
   id: number;
+  merchantId: number;
+  outcome: "early" | "onTime" | "late" | "failed";
   success: boolean;
   penalty: number;
   reward: number;
@@ -72,7 +93,12 @@ export const resourceLevel: Record<Resource, LevelId> = {
 export const FIRST_ORDER_DELAY = 15;
 export const ORDER_DELAY_MIN = 15;
 export const ORDER_DELAY_MAX = 25;
-export type LaborNotice = { id: number; text: string; equipmentWorkerId?: string };
+export type LaborNotice = {
+  id: number;
+  text: string;
+  equipmentWorkerId?: string;
+  illnessWorkerId?: string;
+};
 export const WORK_START = 8 * 60;
 export const WORK_END = 20 * 60;
 export const MINUTES_PER_TICK = 1;
@@ -86,15 +112,21 @@ export const togglePause = (state: GameState): GameState => ({
 });
 export function skipToMorning(state: GameState): GameState {
   if (isWorkingHours(state)) return state;
-  const resolved = finishOrder(state, canFulfillOrder(state));
+  const elapsed =
+    state.minuteOfDay >= WORK_END
+      ? 1440 - state.minuteOfDay + WORK_START
+      : WORK_START - state.minuteOfDay;
+  let resolved = state;
+  for (let i = 0; i < elapsed && resolved.order; i++)
+    resolved = simulateEconomy(resolved);
   const next =
     state.minuteOfDay >= WORK_END ? payDailyWages(resolved) : resolved;
-  return {
+  return refreshOrderPool({
     ...next,
     day: state.day + (state.minuteOfDay >= WORK_END ? 1 : 0),
     minuteOfDay: WORK_START,
     lastTick: Date.now(),
-  };
+  });
 }
 
 export type GameState = {
@@ -114,6 +146,9 @@ export type GameState = {
   orderQuantities: Record<Resource, number>;
   consumptionIn: number;
   shortage: boolean;
+  offerDay: number;
+  orderPool: Order[];
+  merchantCredit: number[];
   order: Order | null;
   orderIn: number;
   orderSequence: number;
@@ -259,7 +294,7 @@ export function changeWorkers(
 }
 
 const initialState = (): GameState => ({
-  version: 13,
+  version: 16,
   hospital: {
     level: 0,
     doctors: 0,
@@ -281,6 +316,9 @@ const initialState = (): GameState => ({
   orderQuantities: zeroStock(),
   consumptionIn: 30,
   shortage: false,
+  offerDay: 0,
+  orderPool: [],
+  merchantCredit: merchants.map(() => 100),
   order: null,
   orderIn: FIRST_ORDER_DELAY,
   orderSequence: 0,
@@ -339,7 +377,9 @@ export function assignJob(
     job === "idle"
       ? "boşa alındı"
       : `${levelInfo[resourceLevel[job]].title} görevine gönderildi`;
-  return reconcileEquipmentNotices(addLedger(next, `Bir işçi ${label}.`, job === "idle" ? "system" : job));
+  return reconcileEquipmentNotices(
+    addLedger(next, `Bir işçi ${label}.`, job === "idle" ? "system" : job),
+  );
 }
 export function simulateTick(state: GameState): GameState {
   if (state.paused) return state;
@@ -356,7 +396,9 @@ export function simulateTick(state: GameState): GameState {
       lastTick: Date.now(),
     }),
   );
-  return simulateLabor(elapsed >= 1440 ? payDailyWages(next) : next);
+  return refreshOrderPool(
+    simulateLabor(elapsed >= 1440 ? payDailyWages(next) : next),
+  );
 }
 export function unlockLevel(state: GameState, level: LevelId): GameState {
   const site = siteDefinitions.find(
@@ -477,13 +519,26 @@ export function workerLabel(worker: Worker): string {
   const site = siteDefinitions.find((site) => site.job === worker.job);
   return site ? `${site.name} sahasında çalışan 1 işçi` : "1 işçi";
 }
-function notifyLabor(state: GameState, text: string, equipmentWorkerId?: string): GameState {
+function notifyLabor(
+  state: GameState,
+  text: string,
+  equipmentWorkerId?: string,
+  illnessWorkerId?: string,
+): GameState {
   const id = state.laborSequence + 1;
   return addLedger(
     {
       ...state,
       laborSequence: id,
-      laborNotices: [{ id, text, ...(equipmentWorkerId ? { equipmentWorkerId } : {}) }, ...state.laborNotices].slice(0, 5),
+      laborNotices: [
+        {
+          id,
+          text,
+          ...(equipmentWorkerId ? { equipmentWorkerId } : {}),
+          ...(illnessWorkerId ? { illnessWorkerId } : {}),
+        },
+        ...state.laborNotices,
+      ].slice(0, 5),
     },
     text,
   );
@@ -533,12 +588,11 @@ export function hospitalRequests(state: GameState) {
   const waiting = state.workers.filter(
     (w) => w.illnessRemaining && !w.treatment,
   ).length;
-  const target = Math.max(state.hospital.doctors * 2, waiting);
   return state.hospital.level
     ? supplyTypes
         .map((type) => ({
           type,
-          count: Math.max(0, target - state.hospital.supplies[type]),
+          count: Math.max(0, waiting - state.hospital.supplies[type]),
         }))
         .filter((r) => r.count > 0)
     : [];
@@ -651,6 +705,8 @@ function simulateLabor(state: GameState): GameState {
       next = notifyLabor(
         next,
         `${workerLabel(worker)} hastalandı. İyileşme 10 dakika, tedaviyle 5 dakika.`,
+        undefined,
+        worker.id,
       );
     }
   }
@@ -668,164 +724,257 @@ export function canFulfillOrder(state: GameState): boolean {
 function advanceLevel(state: GameState): GameState {
   return state;
 }
+export function orderPayout(order: Order): number {
+  return (
+    order.reward +
+    (order.remaining > order.duration * 0.2
+      ? Math.ceil(order.reward * EARLY_BONUS)
+      : 0)
+  );
+}
+function loseCredit(state: GameState, merchantId: number): GameState {
+  const merchantCredit = [...state.merchantCredit];
+  merchantCredit[merchantId] = Math.max(0, merchantCredit[merchantId] - 10);
+  return {
+    ...state,
+    merchantCredit,
+    orderPool: state.orderPool.filter((o) => o.merchantId !== merchantId),
+  };
+}
 function finishOrder(state: GameState, success: boolean): GameState {
   if (!state.order) return state;
   const order = state.order;
   const stock = { ...state.stock };
   if (success)
-    resources.forEach((resource) => {
-      stock[resource] -= order.needs[resource];
+    resources.forEach((r) => {
+      stock[r] -= order.needs[r];
     });
+  const reward = success ? orderPayout(order) : 0;
+  const outcome = !success
+    ? "failed"
+    : order.remaining < 0
+      ? "late"
+      : order.remaining > order.duration * 0.2
+        ? "early"
+        : "onTime";
+  const next = success ? state : loseCredit(state, order.merchantId);
   return addLedger(
-    advanceLevel({
-      ...state,
+    {
+      ...next,
       stock,
-      money: state.money + (success ? order.reward : -order.reward / 2),
+      money: state.money + reward,
       order: null,
       lastOrder: {
         id: order.id,
+        merchantId: order.merchantId,
+        outcome,
         success,
-        penalty: success ? 0 : order.reward / 2,
-        reward: success ? order.reward : 0,
+        penalty: 0,
+        reward,
       },
-    }),
-    success
-      ? `Sipariş #${order.id} başarılı! +${order.reward}₺.`
-      : `Sipariş #${order.id} başarısız: depoda yeterli ürün yok. Ceza: −${order.reward / 2}₺.`,
+    },
+    `${merchants[order.merchantId]} · Sipariş #${order.id}: ${success ? `teslim edildi, +${reward}₺` : "tamamlanamadı, güven −10"}.`,
   );
 }
 export function fulfillOrder(state: GameState): GameState {
   return canFulfillOrder(state) ? finishOrder(state, true) : state;
 }
+export function abandonOrder(state: GameState): GameState {
+  return finishOrder(state, false);
+}
+export function acceptOrder(state: GameState, id: number): GameState {
+  if (state.order) return state;
+  const offer = state.orderPool.find((o) => o.id === id);
+  if (!offer) return state;
+  return {
+    ...state,
+    order: { ...offer, remaining: offer.duration },
+    orderPool: state.orderPool.filter((o) => o.id !== id),
+  };
+}
+// At most one batch per game day, including reloads and morning skips.
+export function refreshOrderPool(state: GameState): GameState {
+  if (state.offerDay >= state.day || !Object.keys(state.sites).length)
+    return state;
+  const seed = (Math.imul(state.seed, 1664525) + 1013904223) >>> 0;
+  const count =
+    dailyOrderMinimum(state.day) + Math.floor((seed / 4294967296) * 4);
+  let next = { ...state, seed, offerDay: state.day, orderPool: [] as Order[] };
+  for (let i = 0; i < count; i++) {
+    const difficulty: OrderDifficulty = (["easy", "medium", "hard"] as const)[
+      i % 3
+    ];
+    next = generateOffer(
+      next,
+      (seed + Math.floor(i / 3)) % merchants.length,
+      i === count - 1,
+      difficulty,
+    );
+  }
+  return addLedger(
+    next,
+    `${state.day}. gün: panoya ${count} kolay, orta ve zor sipariş eklendi.`,
+  );
+}
 function simulateEconomy(state: GameState): GameState {
+  if (!state.order) return state;
+  let next = {
+    ...state,
+    order: { ...state.order, remaining: state.order.remaining - 1 },
+  } as GameState;
+  if (next.order!.remaining === 0 && canFulfillOrder(next))
+    return finishOrder(next, true);
+  if (next.order!.remaining === -1) {
+    next = loseCredit(next, next.order!.merchantId);
+    next = addLedger(
+      next,
+      `${merchants[next.order!.merchantId]}: sipariş gecikti, güven −10.`,
+    );
+  }
+  if (next.order!.remaining <= -LATE_GRACE) return finishOrder(next, false);
+  return next;
+}
+function generateOffer(
+  state: GameState,
+  merchantId: number,
+  challenge = false,
+  difficulty: OrderDifficulty = "medium",
+): GameState {
   let next = state;
-  if (next.order) {
-    next = {
-      ...next,
-      order: { ...next.order, remaining: next.order.remaining - 1 },
-    };
-    if (next.order!.remaining <= 0)
-      next = finishOrder(next, canFulfillOrder(next));
-  } else {
-    next = { ...next, orderIn: next.orderIn - 1 };
-    if (next.orderIn <= 0) {
-      let seed = next.seed;
-      const random = (min: number, max: number) => {
-        seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
-        return min + Math.floor((seed / 4294967296) * (max - min + 1));
-      };
-      const needs = zeroStock();
-      const available = resources.filter(
-        (resource) => !!ownedSite(next, resource),
+  let seed = next.seed;
+  const random = (min: number, max: number) => {
+    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+    return min + Math.floor((seed / 4294967296) * (max - min + 1));
+  };
+  const needs = zeroStock();
+  const available = resources.filter((resource) => !!ownedSite(next, resource));
+  if (!available.length) return { ...next, orderIn: FIRST_ORDER_DELAY };
+  const crew = Math.max(
+    1,
+    next.workers.filter((w) => isHoused(next, w.id) && !w.illnessRemaining)
+      .length,
+  );
+  const dayGrowth = 1 + (state.day - 1) * 0.08;
+  const tier = difficulty === "easy" ? 1 : difficulty === "medium" ? 2 : 3;
+  const count = Math.min(
+    available.length,
+    tier + Math.floor((state.day - 1) / 5),
+  );
+  const averageStock =
+    available.reduce((sum, resource) => sum + next.stock[resource], 0) /
+    available.length;
+  const pressure = (resource: Resource) =>
+    averageStock <= 0
+      ? "normal"
+      : next.stock[resource] >= averageStock * 1.5
+        ? "surplus"
+        : next.stock[resource] <= averageStock * 0.5
+          ? "scarce"
+          : "normal";
+  const weight = (resource: Resource) =>
+    pressure(resource) === "surplus"
+      ? 3
+      : pressure(resource) === "scarce"
+        ? 2
+        : 1;
+  const pool = [...available];
+  const requested: Resource[] = [];
+  // Weighted sampling without replacement, reproducible from the saved seed.
+  for (let i = 0; i < count; i++) {
+    let ticket = random(
+      1,
+      pool.reduce((sum, resource) => sum + weight(resource), 0),
+    );
+    const chosen = pool.findIndex((resource) => {
+      ticket -= weight(resource);
+      return ticket <= 0;
+    });
+    requested.push(pool.splice(chosen, 1)[0]);
+  }
+  if (challenge) {
+    const expansion = siteDefinitions.find((s) => !next.sites[s.id]);
+    if (expansion) {
+      const product = siteProducts(expansion)[0];
+      if (!requested.includes(product)) requested.push(product);
+    }
+  }
+  const orderQuantities = { ...next.orderQuantities };
+  for (const resource of requested) {
+    // Day progression is independent of offer generation order and saved stock.
+    const base = Math.ceil((resource === "wood" ? 8 : 5) * tier * dayGrowth);
+    orderQuantities[resource] = base;
+    const stockDemand =
+      pressure(resource) === "surplus"
+        ? Math.ceil(
+            next.stock[resource] * (tier === 1 ? 0.2 : tier === 2 ? 0.4 : 0.65),
+          )
+        : 0;
+    needs[resource] = Math.max(base, stockDemand);
+    if (difficulty !== "hard" && !challenge)
+      needs[resource] = Math.min(
+        next.warehouseCapacity[resource],
+        needs[resource],
       );
-      if (!available.length) return { ...next, orderIn: FIRST_ORDER_DELAY };
-      const crew = Math.max(
-        1,
-        next.workers.filter((w) => isHoused(next, w.id) && !w.illnessRemaining)
-          .length,
-      );
-      const count = random(
-        1,
-        Math.min(6, crew, Math.max(1, available.length - 1)),
-      );
-      const averageStock =
-        available.reduce((sum, resource) => sum + next.stock[resource], 0) /
-        available.length;
-      const pressure = (resource: Resource) =>
-        averageStock <= 0
-          ? "normal"
-          : next.stock[resource] >= averageStock * 1.5
-            ? "surplus"
-            : next.stock[resource] <= averageStock * 0.5
-              ? "scarce"
-              : "normal";
-      const weight = (resource: Resource) =>
-        pressure(resource) === "surplus"
-          ? 3
-          : pressure(resource) === "scarce"
-            ? 2
-            : 1;
-      const pool = [...available];
-      const requested: Resource[] = [];
-      // Weighted sampling without replacement, reproducible from the saved seed.
-      for (let i = 0; i < count; i++) {
-        let ticket = random(
-          1,
-          pool.reduce((sum, resource) => sum + weight(resource), 0),
-        );
-        const chosen = pool.findIndex((resource) => {
-          ticket -= weight(resource);
-          return ticket <= 0;
-        });
-        requested.push(pool.splice(chosen, 1)[0]);
-      }
-      const orderQuantities = { ...next.orderQuantities };
-      for (const resource of requested) {
-        const previous = next.orderQuantities[resource];
-        // Growth is bounded by the crew and storage, never by elapsed order count alone.
-        const limit = Math.min(
-          next.warehouseCapacity[resource],
-          Math.max(12, Math.floor((crew * 8) / count)),
-        );
-        const base = Math.min(
-          limit,
-          previous > 0
-            ? previous + random(1, 3)
-            : resource === "wood"
-              ? random(10, 14)
-              : random(3, 10),
-        );
-        // Stock pressure is temporary; do not compound it into future base quantities.
-        orderQuantities[resource] = base;
-        needs[resource] = Math.min(
-          next.warehouseCapacity[resource],
-          pressure(resource) === "surplus"
-            ? Math.max(base, Math.ceil(next.stock[resource] * 0.6))
-            : pressure(resource) === "scarce"
-              ? Math.min(limit, base + random(2, 4))
-              : base,
-        );
-      }
-      const missing = requested.reduce(
-        (sum, resource) =>
-          sum + Math.max(0, needs[resource] - next.stock[resource]),
-        0,
-      );
-      // Allow time to produce missing stock and reassign workers.
-      const netRate = crew * 0.2;
-      const duration = Math.max(
-        random(60, 90),
-        Math.min(240, Math.ceil(missing / netRate) + 20),
-      );
-      const reward = Math.ceil(
-        resources.reduce(
-          (total, resource) =>
-            total + needs[resource] * levelInfo[resourceLevel[resource]].price,
-          0,
-        ) * 2,
-      );
-      const order = {
-        id: next.orderSequence + 1,
-        needs,
-        reward,
-        duration,
-        remaining: duration,
-      };
-      const orderIn = random(ORDER_DELAY_MIN, ORDER_DELAY_MAX);
-      next = addLedger(
-        {
-          ...next,
-          seed,
-          order,
-          orderIn,
-          orderQuantities,
-          orderSequence: order.id,
-        },
-        `Yeni sipariş #${order.id}: ${duration} saniye, ${reward}₺ ödül.`,
+  }
+  if (challenge) {
+    for (const resource of requested) {
+      needs[resource] = Math.max(
+        needs[resource] * 2,
+        Math.ceil(next.warehouseCapacity[resource] * 1.2),
       );
     }
   }
-  return next;
+
+  const missing = requested.reduce(
+    (sum, resource) =>
+      sum + Math.max(0, needs[resource] - next.stock[resource]),
+    0,
+  );
+  // Allow time to produce missing stock and reassign workers.
+  const netRate = Math.max(0.2, crew * 0.1);
+  const duration = challenge
+    ? random(360, 540)
+    : Math.max(
+        random(60, 90),
+        Math.min(900, Math.ceil(missing / netRate) + 60),
+      );
+  const reward = Math.ceil(
+    resources.reduce(
+      (total, resource) =>
+        total + needs[resource] * levelInfo[resourceLevel[resource]].price,
+      0,
+    ) *
+      (challenge
+        ? 3
+        : difficulty === "hard"
+          ? 2.5
+          : difficulty === "medium"
+            ? 2
+            : 1.5),
+  );
+  const order = {
+    difficulty: challenge ? ("hard" as const) : difficulty,
+    dayLevel: state.day,
+    challenge,
+    merchantId,
+    id: next.orderSequence + 1,
+    needs,
+    reward: Math.max(
+      1,
+      Math.floor(reward * (0.5 + next.merchantCredit[merchantId] / 200)),
+    ),
+    duration,
+    remaining: duration,
+  };
+  const orderIn = random(ORDER_DELAY_MIN, ORDER_DELAY_MAX);
+  return {
+    ...next,
+    seed,
+    orderPool: [...next.orderPool, order],
+    orderIn,
+    orderQuantities,
+    orderSequence: order.id,
+  };
 }
 // Migrate existing saves without losing the player's workers, money or warehouse.
 export function loadGame(raw: string | null): GameState {
@@ -848,7 +997,11 @@ export function loadGame(raw: string | null): GameState {
       return defaults;
     const stock = { ...zeroStock(), ...saved.stock };
     const order = saved.order
-      ? { ...saved.order, needs: { ...zeroStock(), ...saved.order.needs } }
+      ? {
+          ...saved.order,
+          merchantId: saved.order.merchantId ?? 0,
+          needs: { ...zeroStock(), ...saved.order.needs },
+        }
       : null;
     const orderQuantities = {
       ...zeroStock(),
@@ -883,11 +1036,15 @@ export function loadGame(raw: string | null): GameState {
         ...defaults,
         ...saved,
         laborNotices: (saved.laborNotices ?? defaults.laborNotices).map(
-          (notice: LaborNotice) => ({ ...notice, text: notice.text.replace(/^w\d+:\s*/, "1 işçi ") }),
+          (notice: LaborNotice) => ({
+            ...notice,
+            text: notice.text.replace(/^w\d+:\s*/, "1 işçi "),
+          }),
         ),
-        ledger: (saved.ledger ?? defaults.ledger).map(
-          (item: LedgerItem) => ({ ...item, text: item.text.replace(/^w\d+:\s*/, "1 işçi ") }),
-        ),
+        ledger: (saved.ledger ?? defaults.ledger).map((item: LedgerItem) => ({
+          ...item,
+          text: item.text.replace(/^w\d+:\s*/, "1 işçi "),
+        })),
         workers: saved.workers.map(
           (w: Worker & { strikeRemaining?: number }) => {
             const { strikeRemaining: removed, ...worker } = w;
@@ -897,13 +1054,35 @@ export function loadGame(raw: string | null): GameState {
         ),
         hospital: normalizeHospital(saved.hospital),
         stock,
-        order,
+        order: saved.version >= 14 ? order : null,
+        offerDay:
+          saved.version < 16
+            ? 0
+            : Number.isSafeInteger(saved.offerDay)
+              ? saved.offerDay
+              : saved.orderPool?.length
+                ? saved.day
+                : 0,
+        orderPool:
+          saved.version >= 14
+            ? (saved.orderPool ?? []).map((o: Order) => ({
+                ...o,
+                needs: { ...zeroStock(), ...o.needs },
+              }))
+            : order
+              ? [order]
+              : [],
+        merchantCredit: merchants.map((_, i) =>
+          Number.isFinite(saved.merchantCredit?.[i])
+            ? Math.max(0, Math.min(100, saved.merchantCredit[i]))
+            : 100,
+        ),
         orderIn,
         orderQuantities,
         warehouseCapacity,
         shelterCapacity,
         lastOrder: saved.lastOrder ? { penalty: 0, ...saved.lastOrder } : null,
-        version: 13,
+        version: 16,
         day: Number.isSafeInteger(saved.day) && saved.day >= 1 ? saved.day : 1,
         minuteOfDay:
           Number.isInteger(saved.minuteOfDay) &&
@@ -944,7 +1123,6 @@ export const categories: {
   icon: string;
   manager: string;
 }[] = [
-  { id: "hospital", name: "Hastane", icon: "🏥", manager: "Hastane Müdürü" },
   { id: "forest", name: "Orman", icon: "🌲", manager: "Orman Müdürü" },
   { id: "farm", name: "Tarım", icon: "🌾", manager: "Tarım Müdürü" },
   {
@@ -954,6 +1132,7 @@ export const categories: {
     manager: "Hayvancılık Müdürü",
   },
   { id: "mine", name: "Maden", icon: "⛏️", manager: "Maden Müdürü" },
+  { id: "hospital", name: "Hastane", icon: "🏥", manager: "Hastane Müdürü" },
 ];
 export const equipmentTypes = {
   axe: { name: "Balta", price: 12, icon: "🪓" },
@@ -1197,18 +1376,48 @@ export function buyEquipment(
 export function reconcileEquipmentNotices(state: GameState): GameState {
   const missing = new Set<string>();
   for (const site of siteDefinitions) {
-    const crew = state.workers.filter(w => w.job === site.job && !w.illnessRemaining && isHoused(state, w.id));
-    crew.slice(equippedCapacity(state, site)).forEach(w => missing.add(w.id));
+    const crew = state.workers.filter(
+      (w) => w.job === site.job && !w.illnessRemaining && isHoused(state, w.id),
+    );
+    crew.slice(equippedCapacity(state, site)).forEach((w) => missing.add(w.id));
   }
   return {
     ...state,
-    workers: state.workers.map(w => !w.illnessRemaining && isHoused(state, w.id) && !missing.has(w.id) && w.unequippedTicks ? { ...w, unequippedTicks: 0 } : w),
-    laborNotices: state.laborNotices.filter(notice => {
-      if (notice.equipmentWorkerId) return missing.has(notice.equipmentWorkerId);
+    workers: state.workers.map((w) =>
+      !w.illnessRemaining &&
+      isHoused(state, w.id) &&
+      !missing.has(w.id) &&
+      w.unequippedTicks
+        ? { ...w, unequippedTicks: 0 }
+        : w,
+    ),
+    laborNotices: state.laborNotices.filter((notice) => {
+      if (notice.illnessWorkerId)
+        return state.workers.some(
+          (w) =>
+            w.id === notice.illnessWorkerId &&
+            w.illnessRemaining &&
+            !w.treatment,
+        );
+      if (notice.text.includes("hastalandı.")) {
+        const site = siteDefinitions.find((s) =>
+          notice.text.startsWith(`${s.name} sahasında`),
+        );
+        return state.workers.some(
+          (w) =>
+            w.illnessRemaining && !w.treatment && (!site || w.job === site.job),
+        );
+      }
+      if (notice.equipmentWorkerId)
+        return missing.has(notice.equipmentWorkerId);
       if (!notice.text.includes("ekipmansız kaldı.")) return true;
       // Older saves have unstructured notices. Resolve their site where possible.
-      const site = siteDefinitions.find(s => notice.text.startsWith(`${s.name} sahasında`));
-      return state.workers.some(w => missing.has(w.id) && (!site || w.job === site.job));
+      const site = siteDefinitions.find((s) =>
+        notice.text.startsWith(`${s.name} sahasında`),
+      );
+      return state.workers.some(
+        (w) => missing.has(w.id) && (!site || w.job === site.job),
+      );
     }),
   };
 }
@@ -1320,6 +1529,23 @@ export function productionShortages(
       ),
     }))
     .filter((item) => item.missing > 0);
+}
+export function setProduction(
+  state: GameState,
+  id: string,
+  output: Resource,
+  quantity: number,
+): GameState {
+  const site = state.sites[id];
+  if (!site || !Number.isSafeInteger(quantity) || quantity < 0) return state;
+  const current = productionRemaining(site, output);
+  const other = site.queue.reduce((sum, q) => sum + q.remaining, 0) - current;
+  return adjustProduction(
+    state,
+    id,
+    output,
+    Math.min(quantity, Math.max(0, productionCapacity(site) - other)) - current,
+  );
 }
 export function adjustProduction(
   state: GameState,

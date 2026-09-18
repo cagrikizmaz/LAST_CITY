@@ -44,6 +44,36 @@ const render = async (state?: g.GameState) => {
     localStorage.setItem("last-city-workers-v2", JSON.stringify(state));
   await act(async () => root.render(<App />));
 };
+it("edits a production target while ticks continue and clamps to capacity", async () => {
+  await render(g.purchaseSite({ ...g.emptyState(), money: 1000 }, "barn"));
+  await click("Hayvancılık");
+  await click("İnek Ahırı");
+  const input = container.querySelector<HTMLInputElement>('input[aria-label="Kaymak kalan üretim"]')!;
+  const type = async (value: string) => {
+    await act(async () => input.focus());
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  };
+  await type("25");
+  await act(async () => vi.advanceTimersByTime(2000));
+  expect(input.value).toBe("25");
+  await act(async () => input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+  const output = g.siteDefinitions.find((s) => s.id === "barn")!.recipes[1].output;
+  expect(g.productionRemaining(saved().sites.barn, output)).toBe(25);
+  await clickLabel("Kaymak üretimini artır");
+  expect(input.value).toBe("26");
+  await type("999");
+  await act(async () => input.blur());
+  expect(input.value).toBe("100");
+  await type("");
+  await act(async () => input.blur());
+  expect(input.value).toBe("100");
+  await type("0");
+  await act(async () => input.blur());
+  expect(g.productionRemaining(saved().sites.barn, output)).toBe(0);
+});
 it("browses categories, buys a site and equipment, assigns staff and persists production", async () => {
   await render();
   expect(container.querySelectorAll(".category-card")).toHaveLength(5);
@@ -115,9 +145,10 @@ it("adjusts each product with steppers and displays exact live shortages", async
 it("opens the owned site from the resource strip beside the clock", async () => {
   await render(g.purchaseSite(g.emptyState(), "coop"));
   const nav = container.querySelector("header .resource-strip")!;
-  expect(nav.previousElementSibling?.getAttribute("aria-label")).toBe(
-    "Oyun saati",
-  );
+  const overview = nav.closest("details")!;
+  expect(overview.open).toBe(false);
+  await act(async () => overview.querySelector("summary")!.click());
+  expect(overview.open).toBe(true);
   await act(async () =>
     nav.querySelector<HTMLButtonElement>("button")!.click(),
   );
@@ -137,6 +168,7 @@ it("hires, expands shelter and delivers an order without unlocking new sites", a
     ...state,
     stock: { ...state.stock, wood: 10 },
     order: {
+      merchantId: 0,
       id: 1,
       needs: { ...g.zeroStock(), wood: 10 },
       reward: 20,
@@ -146,8 +178,9 @@ it("hires, expands shelter and delivers an order without unlocking new sites", a
   });
   await click("Barınak +3");
   expect(saved().shelterCapacity).toBe(6);
+  await click("Siparişler");
   await click("Siparişi teslim et");
-  expect(saved().money).toBe(390);
+  expect(saved().money).toBe(394);
   expect(saved().stock.wood).toBe(0);
   expect(Object.keys(saved().sites)).toEqual(["lumber"]);
 });
@@ -337,4 +370,57 @@ it("builds a hospital, hires doctors and buys requested supplies", async () => {
   });
   await click("Hastaneyi yükselt");
   expect(g.doctorCapacity(saved())).toBe(4);
+});
+
+it("uses stocked hospital supplies for a waiting patient and shows the actual waiting reason", async () => {
+  const state = g.emptyState();
+  await render({
+    ...state,
+    laborEventIn: 99999,
+    hospital: {
+      level: 3,
+      doctors: 0,
+      supplies: { syringe: 7, painkiller: 7, antibiotic: 7 },
+    },
+    workers: state.workers.map((w, i) => ({
+      ...w,
+      illnessRemaining: i === 0 ? 600 : 0,
+    })),
+  });
+  await click("Hastane");
+  expect(container.textContent).toContain("Doktor bekliyor");
+  expect(container.textContent).toContain("Bekleyen malzeme talebi yok.");
+  await click("Doktor al");
+  await act(async () => vi.advanceTimersByTime(1000));
+  expect(container.textContent).toContain("Tedavi oluyor");
+  expect(saved().hospital.supplies).toEqual({
+    syringe: 6,
+    painkiller: 6,
+    antibiotic: 6,
+  });
+});
+
+it("lets the player inspect and accept merchant offers", async () => {
+  await render(g.purchaseSite({ ...g.emptyState(), money: 500 }, "lumber"));
+  expect(container.querySelector(".order-card")).toBeNull();
+  await click("Siparişler");
+  expect(container.querySelector(".orders-screen")).not.toBeNull();
+  expect(button("Teklifleri yenile")).toBeUndefined();
+  expect(saved().order).toBeNull();
+  const count = saved().orderPool.length;
+  expect(count).toBeGreaterThanOrEqual(2);
+  expect(container.querySelector(".offer-badge")?.textContent).toBe(
+    String(count),
+  );
+  expect(container.textContent).toContain("Yatırım siparişi");
+  expect(container.textContent).toContain("Yeni saha gerekli");
+  const offer = saved().orderPool[0];
+  await click(`Siparişi kabul et #${offer.id}`);
+  expect(saved().order?.id).toBe(offer.id);
+  expect(saved().orderPool).toHaveLength(count - 1);
+  expect(container.querySelector(".offer-badge")?.textContent).toBe(
+    String(count - 1),
+  );
+  await click("Üretim");
+  expect(container.querySelector(".orders-screen")).toBeNull();
 });

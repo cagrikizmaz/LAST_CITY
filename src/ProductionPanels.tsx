@@ -148,6 +148,46 @@ export function EquipmentPurchase({
     </div>
   );
 }
+function ProductionQuantity({
+  value,
+  max,
+  label,
+  commit,
+}: {
+  value: number;
+  max: number;
+  label: string;
+  commit: (value: number) => void;
+}) {
+  const [draft, setDraft] = useState<string | null>(null);
+  const save = () => {
+    if (draft !== null && /^\d+$/.test(draft)) commit(Number(draft));
+    setDraft(null);
+  };
+  return (
+    <input
+      type="number"
+      inputMode="numeric"
+      min={0}
+      max={max}
+      step={1}
+      aria-label={`${label} kalan üretim`}
+      value={draft ?? value}
+      onFocus={(e) => {
+        setDraft(String(value));
+        e.currentTarget.select();
+      }}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={save}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") e.currentTarget.blur();
+        if (e.key === "Escape") {
+          setDraft(null);
+        }
+      }}
+    />
+  );
+}
 export function ProductControls({
   state,
   act,
@@ -159,8 +199,9 @@ export function ProductControls({
     <section className="panel recipes-panel">
       <h2>Üretim</h2>
       <p>
-        − / + ile kalan üretim hedefini ayarla. Her ürün bağımsız ilerler;
-        hammadde gerektirmeyenler sürekli üretilir.
+        − / + ile veya sayıyı yazarak kalan üretim hedefini ayarla. Enter ya da
+        alan dışına tıklayarak uygula. Her ürün bağımsız ilerler; hammadde
+        gerektirmeyenler sürekli üretilir.
       </p>
       {definition.recipes.map((recipe) => {
         const automatic = g.isAutomatic(recipe);
@@ -202,9 +243,21 @@ export function ProductControls({
                   >
                     −
                   </button>
-                  <output aria-label={`${label} kalan üretim`}>
-                    {remaining}
-                  </output>
+                  <ProductionQuantity
+                    value={remaining}
+                    max={g.productionCapacity(site) - total + remaining}
+                    label={label}
+                    commit={(quantity) =>
+                      act((s) =>
+                        g.setProduction(
+                          s,
+                          definition.id,
+                          recipe.output,
+                          quantity,
+                        ),
+                      )
+                    }
+                  />
                   <button
                     aria-label={`${label} üretimini artır`}
                     disabled={total >= g.productionCapacity(site)}
@@ -436,6 +489,20 @@ export function HospitalSupplies({ state, act }: Props) {
 }
 export function HospitalPanel({ state, act }: Props) {
   const patients = state.workers.filter((w) => w.illnessRemaining);
+  const missingSupplies = g.supplyTypes.filter(
+    (type) => state.hospital.supplies[type] < 1,
+  );
+  const waitingReason = !state.hospital.level
+    ? "Hastane kurulmalı"
+    : !state.hospital.doctors
+      ? "Doktor bekliyor"
+      : patients.filter((w) => w.treatment).length >= state.hospital.doctors * 2
+        ? "Boş tedavi kapasitesi bekliyor"
+        : missingSupplies.length
+          ? `Eksik malzeme: ${missingSupplies.map((type) => g.medicalSupplies[type].name).join(", ")}`
+          : state.paused
+            ? "Oyun duraklatıldı; devam edince stoktan tedavi başlayacak"
+            : "Stoktan tedavi başlayacak";
   return (
     <section className="panel hospital-panel">
       <span className="eyebrow">SAĞLIK MERKEZİ</span>
@@ -472,7 +539,7 @@ export function HospitalPanel({ state, act }: Props) {
       {patients.length === 0 && <p>Hasta işçi yok.</p>}
       {patients.map((w) => (
         <p key={w.id}>
-          {g.workerLabel(w)} · {w.treatment ? "Tedavi oluyor" : "Tedavi bekliyor"} ·{" "}
+          {g.workerLabel(w)} · {w.treatment ? "Tedavi oluyor" : waitingReason} ·{" "}
           {Math.ceil(w.illnessRemaining! / (w.treatment ? 2 : 1))} sn kaldı
         </p>
       ))}

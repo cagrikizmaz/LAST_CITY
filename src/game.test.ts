@@ -29,11 +29,11 @@ describe("categories and purchases", () => {
   });
   it("has the requested sites and categories", () => {
     expect(g.categories.map((c) => c.name)).toEqual([
-      "Hastane",
       "Orman",
       "Tarım",
       "Hayvancılık",
       "Maden",
+      "Hastane",
     ]);
     expect(g.siteDefinitions.map((s) => s.name)).toEqual(
       expect.arrayContaining([
@@ -352,39 +352,99 @@ describe("requested production", () => {
   });
 });
 describe("economy, clock and labor regression", () => {
-  it("creates reproducible orders only for purchased sites and never unlocks on delivery", () => {
-    const state = { ...ready("coop"), orderIn: 1, seed: 123 };
-    const next = g.simulateTick(state);
-    expect(next.order).toEqual(g.simulateTick(state).order);
+  it("requires selection from a reproducible pool and pays early bonus", () => {
+    const state = { ...ready("coop"), seed: 123 };
+    expect(ticks(state, 100).order).toBeNull();
+    const pool = g.refreshOrderPool(state);
+    expect(pool.orderPool).toEqual(g.refreshOrderPool(state).orderPool);
+    expect(pool.orderPool.length).toBeGreaterThanOrEqual(12);
+    expect(pool.orderPool.length).toBeLessThanOrEqual(15);
+    expect(pool.order).toBeNull();
+    const waiting = ticks(pool, 10);
+    expect(waiting.orderPool).toEqual(pool.orderPool);
+    const next = g.acceptOrder(pool, pool.orderPool[0].id);
+    expect(g.acceptOrder(next, pool.orderPool[1].id)).toBe(next);
     expect(g.resources.filter((r) => next.order!.needs[r] > 0)).toEqual([
       "egg",
     ]);
     const filled = { ...next, stock: { ...next.stock, egg: 100 } };
     const delivered = g.fulfillOrder(filled);
-    expect(delivered.money).toBe(filled.money + filled.order!.reward);
+    expect(delivered.money).toBe(filled.money + g.orderPayout(filled.order!));
+    expect(delivered.lastOrder?.outcome).toBe("early");
     expect(delivered.sites).toEqual(filled.sites);
     expect(g.fulfillOrder(delivered)).toBe(delivered);
   });
-  it.each([true, false])(
-    "settles orders exactly once at deadline (enough stock %s)",
-    (enough) => {
-      const state = {
-        ...ready(),
-        stock: { ...g.zeroStock(), wood: enough ? 10 : 0 },
-        order: {
-          id: 1,
-          needs: { ...g.zeroStock(), wood: 10 },
-          reward: 20,
-          remaining: 1,
-          duration: 60,
-        },
-      };
-      const next = g.simulateTick(state);
-      expect(next.money).toBe(state.money + (enough ? 20 : -10));
-      expect(next.order).toBeNull();
-      expect(g.fulfillOrder(next)).toBe(next);
+  const contract = () => ({
+    ...ready(),
+    stock: g.zeroStock(),
+    order: {
+      merchantId: 0,
+      id: 1,
+      needs: { ...g.zeroStock(), wood: 10 },
+      reward: 20,
+      remaining: 1,
+      duration: 60,
     },
-  );
+  });
+  it("pays normal price at deadline and only consumes stock once", () => {
+    const state = contract();
+    state.stock.wood = 10;
+    const next = g.simulateTick(state);
+    expect(next.money).toBe(state.money + 20);
+    expect(next.order).toBeNull();
+    expect(next.lastOrder?.outcome).toBe("onTime");
+    expect(next.stock.wood).toBe(0);
+    expect(next.merchantCredit).toEqual([100, 100, 100]);
+    expect(g.fulfillOrder(next)).toBe(next);
+  });
+  it("penalizes delay once, allows late delivery and discounts only that merchant", () => {
+    const state = contract();
+    const late = ticks(state, 2);
+    expect(late.order?.remaining).toBe(-1);
+    expect(late.merchantCredit).toEqual([90, 100, 100]);
+    expect(ticks(late, 5).merchantCredit).toEqual([90, 100, 100]);
+    const delivered = g.fulfillOrder({
+      ...late,
+      stock: { ...late.stock, wood: 10 },
+    });
+    expect(delivered.money).toBe(late.money + 20);
+    expect(delivered.lastOrder?.outcome).toBe("late");
+    const normal = g.refreshOrderPool({ ...state, seed: 123 });
+    const discounted = g.refreshOrderPool({
+      ...state,
+      seed: 123,
+      merchantCredit: [90, 100, 100],
+    });
+    discounted.orderPool.forEach((offer, i) => {
+      if (offer.merchantId === 0)
+        expect(offer.reward).toBeLessThan(normal.orderPool[i].reward);
+      else expect(offer).toEqual(normal.orderPool[i]);
+    });
+    expect(late.order?.reward).toBe(20);
+  });
+  it("fails after grace period without a cash fine and persists credit", () => {
+    const state = contract();
+    const failed = ticks(state, 31);
+    expect(failed.order).toBeNull();
+    expect(failed.merchantCredit).toEqual([80, 100, 100]);
+    expect(failed.money).toBe(state.money);
+    expect(failed.lastOrder?.outcome).toBe("failed");
+    expect(ticks(failed, 3).merchantCredit).toEqual(failed.merchantCredit);
+    expect(g.loadGame(JSON.stringify(failed)).merchantCredit).toEqual(
+      failed.merchantCredit,
+    );
+  });
+  it("migrates legacy automatic orders into offers and preserves accepted new orders", () => {
+    const state = contract();
+    const migrated = g.loadGame(JSON.stringify({ ...state, version: 13 }));
+    expect(migrated.order).toBeNull();
+    expect(migrated.orderPool[0].id).toBe(1);
+    expect(g.loadGame(JSON.stringify(state)).order).toEqual(state.order);
+    expect(g.abandonOrder(state).merchantCredit).toEqual([90, 100, 100]);
+    expect(
+      g.skipToMorning({ ...state, minuteOfDay: 1200 }).merchantCredit,
+    ).toEqual([80, 100, 100]);
+  });
   it("preserves pause and working hour boundaries", () => {
     const state = ready();
     const paused = { ...state, paused: true };
@@ -613,6 +673,34 @@ describe("hospital and labor events", () => {
       workers: state.workers.map((w) => ({ ...w, illnessRemaining: 600 })),
     };
   };
+  it("treats waiting patients from seven stocked sets without requesting supplies for empty beds", () => {
+    const state = {
+      ...sick(),
+      hospital: {
+        level: 3,
+        doctors: 6,
+        supplies: { syringe: 7, painkiller: 7, antibiotic: 7 },
+      },
+    };
+    expect(g.hospitalRequests(state)).toEqual([]);
+    const next = ticks(state, 1);
+    expect(next.workers.every((w) => w.treatment)).toBe(true);
+    expect(next.hospital.supplies).toEqual({
+      syringe: 4,
+      painkiller: 4,
+      antibiotic: 4,
+    });
+    expect(g.hospitalRequests(next)).toEqual([]);
+    expect(
+      g.hospitalRequests({
+        ...state,
+        hospital: {
+          ...state.hospital,
+          supplies: { syringe: 7, painkiller: 7, antibiotic: 1 },
+        },
+      }),
+    ).toEqual([{ type: "antibiotic", count: 2 }]);
+  });
   it("recovers naturally in 600 ticks and treats only two patients per doctor in 300 ticks", () => {
     const state = sick();
     expect(ticks(state, 599).workers[0].illnessRemaining).toBe(1);
@@ -649,6 +737,36 @@ describe("hospital and labor events", () => {
     expect(ticks(state, 1).hospital.supplies.syringe).toBe(2);
     const paused = { ...state, paused: true };
     expect(g.simulateTick(paused)).toBe(paused);
+  });
+  it("uses existing stock when the last missing supply arrives, only once per treatment", () => {
+    const state = {
+      ...sick(),
+      hospital: {
+        level: 1,
+        doctors: 1,
+        supplies: { syringe: 2, painkiller: 2, antibiotic: 0 },
+      },
+    };
+    const stocked = g.buyMedicalSupply(state, "antibiotic");
+    const treated = ticks(stocked, 1);
+    expect(treated.workers.map((w) => !!w.treatment)).toEqual([
+      true,
+      false,
+      false,
+    ]);
+    expect(treated.hospital.supplies).toEqual({
+      syringe: 1,
+      painkiller: 1,
+      antibiotic: 0,
+    });
+    expect(ticks(treated, 1).hospital.supplies).toEqual(
+      treated.hospital.supplies,
+    );
+    expect(stocked.hospital.supplies).toEqual({
+      syringe: 2,
+      painkiller: 2,
+      antibiotic: 1,
+    });
   });
   it("resigns only after prolonged equipment shortage and resets after equipment returns", () => {
     const state = ready();
@@ -708,18 +826,160 @@ describe("hospital and labor events", () => {
 
 it("clears equipment warnings immediately only when the full kit is restored", () => {
   let state = ticks({ ...ready(), equipment: [] }, 1);
-  expect(state.laborNotices.some(n => n.equipmentWorkerId === "w1")).toBe(true);
+  expect(state.laborNotices.some((n) => n.equipmentWorkerId === "w1")).toBe(
+    true,
+  );
   state = g.buyEquipment(state, "lumber", "axe");
-  expect(state.laborNotices.some(n => n.equipmentWorkerId === "w1")).toBe(true);
+  expect(state.laborNotices.some((n) => n.equipmentWorkerId === "w1")).toBe(
+    true,
+  );
   state = g.buyEquipment({ ...state, paused: true }, "lumber", "gloves");
-  expect(state.laborNotices.some(n => n.equipmentWorkerId === "w1")).toBe(false);
+  expect(state.laborNotices.some((n) => n.equipmentWorkerId === "w1")).toBe(
+    false,
+  );
   expect(state.workers[0].unequippedTicks).toBe(0);
-  expect(state.ledger.some(n => n.text.includes("ekipmansız kaldı"))).toBe(true);
+  expect(state.ledger.some((n) => n.text.includes("ekipmansız kaldı"))).toBe(
+    true,
+  );
 });
 it("clears resolved legacy equipment warnings on load and when unassigning", () => {
   const state = ready();
-  const loaded = g.loadGame(JSON.stringify({ ...state, laborNotices: [{ id: 1, text: "Oduncu sahasında çalışan 1 işçi ekipmansız kaldı. 10 dakika mesai boyunca ekipman sağlanmazsa istifa edecek." }] }));
+  const loaded = g.loadGame(
+    JSON.stringify({
+      ...state,
+      laborNotices: [
+        {
+          id: 1,
+          text: "Oduncu sahasında çalışan 1 işçi ekipmansız kaldı. 10 dakika mesai boyunca ekipman sağlanmazsa istifa edecek.",
+        },
+      ],
+    }),
+  );
   expect(loaded.laborNotices).toEqual([]);
   const waiting = ticks({ ...state, equipment: [] }, 1);
   expect(g.assignJob(waiting, "w1", "idle").laborNotices).toEqual([]);
+});
+
+describe("daily order board", () => {
+  it("mixes all difficulties and increases demand with game days", () => {
+    const state = ready();
+    const first = g.refreshOrderPool({
+      ...state,
+      day: 1,
+      offerDay: 0,
+      seed: 123,
+    });
+    const later = g.refreshOrderPool({
+      ...state,
+      day: 10,
+      offerDay: 0,
+      seed: 123,
+    });
+    expect(new Set(first.orderPool.map((o) => o.difficulty)).size).toBe(3);
+    expect(first.orderPool.length).toBeGreaterThanOrEqual(12);
+    expect(later.orderPool.length).toBeGreaterThan(first.orderPool.length);
+    for (const difficulty of ["easy", "medium", "hard"] as const) {
+      const early = first.orderPool.find((o) => o.difficulty === difficulty)!;
+      const late = later.orderPool.find((o) => o.difficulty === difficulty)!;
+      expect(late.needs.wood).toBeGreaterThan(early.needs.wood);
+      expect(late.reward).toBeGreaterThan(early.reward);
+      expect(late.dayLevel).toBe(10);
+    }
+    expect(g.dailyOrderMinimum(100)).toBe(30);
+  });
+  it("upgrades old boards while preserving an accepted order", () => {
+    const state = g.refreshOrderPool(ready());
+    const accepted = g.acceptOrder(state, state.orderPool[0].id);
+    const loaded = g.refreshOrderPool(
+      g.loadGame(JSON.stringify({ ...accepted, version: 15 })),
+    );
+    expect(loaded.order).toEqual(accepted.order);
+    expect(loaded.orderPool.length).toBeGreaterThanOrEqual(12);
+    expect(g.refreshOrderPool(loaded)).toBe(loaded);
+  });
+  it("cannot reroll or refill exhausted offers within the same day, even after reload", () => {
+    const daily = g.refreshOrderPool(ready());
+    expect(g.refreshOrderPool(daily)).toBe(daily);
+    const exhausted = { ...daily, orderPool: [] };
+    expect(g.refreshOrderPool(exhausted)).toBe(exhausted);
+    const loaded = g.loadGame(JSON.stringify(exhausted));
+    expect(g.refreshOrderPool(loaded).orderPool).toEqual([]);
+    const midnight = g.simulateTick({ ...exhausted, minuteOfDay: 1439 });
+    expect(midnight.offerDay).toBe(daily.day + 1);
+    expect(midnight.orderPool.length).toBeGreaterThanOrEqual(12);
+    const morning = g.skipToMorning({ ...exhausted, minuteOfDay: 1200 });
+    expect(morning.offerDay).toBe(daily.day + 1);
+    const sameDay = g.skipToMorning({ ...daily, minuteOfDay: 1 });
+    expect(sameDay.orderPool).toEqual(daily.orderPool);
+  });
+  it("varies the daily count and offers expansion and warehouse investments", () => {
+    const counts = new Set<number>();
+    for (let seed = 1; seed < 10000; seed += 71) {
+      const state = ready();
+      const daily = g.refreshOrderPool({ ...state, seed });
+      counts.add(daily.orderPool.length);
+      const challenge = daily.orderPool.find((o) => o.challenge)!;
+      expect(challenge).toBeDefined();
+      expect(
+        g.resources.some(
+          (r) => challenge.needs[r] > state.warehouseCapacity[r],
+        ),
+      ).toBe(true);
+      expect(
+        g.resources.some(
+          (r) => challenge.needs[r] > 0 && !g.ownedSite(state, r),
+        ),
+      ).toBe(true);
+      const accepted = g.acceptOrder(daily, daily.orderPool[0].id);
+      const tomorrow = g.refreshOrderPool({
+        ...accepted,
+        day: accepted.day + 1,
+      });
+      expect(tomorrow.order).toEqual(accepted.order);
+      expect(tomorrow.orderPool.every((o) => o.id > daily.orderSequence)).toBe(
+        true,
+      );
+    }
+    expect(counts.size).toBe(4);
+  });
+  it("clears only the treated worker's illness alert and retains waiting patients", () => {
+    const state = ready();
+    const next = g.simulateTick({
+      ...state,
+      workers: state.workers.map((w) => ({ ...w, illnessRemaining: 600 })),
+      laborNotices: state.workers.map((w, id) => ({
+        id,
+        text: "İşçi hastalandı.",
+        illnessWorkerId: w.id,
+      })),
+      hospital: {
+        level: 1,
+        doctors: 1,
+        supplies: { syringe: 1, painkiller: 1, antibiotic: 1 },
+      },
+    });
+    expect(next.workers[0].treatment).toBe(true);
+    expect(
+      next.laborNotices.some((n) => n.illnessWorkerId === state.workers[0].id),
+    ).toBe(false);
+    expect(next.laborNotices.filter((n) => n.illnessWorkerId)).toHaveLength(2);
+  });
+});
+
+it("sets production targets without exceeding shared capacity or resetting progress", () => {
+  const state = g.purchaseSite({ ...g.emptyState(), money: 1000 }, "barn");
+  const recipes = g.siteDefinitions.find((s) => s.id === "barn")!.recipes;
+  const first = recipes[1].output;
+  const second = recipes[2].output;
+  let next = g.setProduction(state, "barn", second, 30);
+  next.sites.barn.productProgress = { [first]: 40 };
+  next = g.setProduction(next, "barn", first, 999);
+  expect(g.productionRemaining(next.sites.barn, first)).toBe(70);
+  expect(next.sites.barn.productProgress?.[first]).toBe(40);
+  for (const invalid of [-1, 1.5, NaN, Infinity])
+    expect(g.setProduction(next, "barn", first, invalid)).toBe(next);
+  next = g.setProduction(next, "barn", first, 0);
+  expect(g.productionRemaining(next.sites.barn, first)).toBe(0);
+  expect(next.sites.barn.productProgress?.[first]).toBe(0);
+  expect(g.productionRemaining(next.sites.barn, second)).toBe(30);
 });
