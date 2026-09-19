@@ -7,6 +7,7 @@ export type Job =
   | "stone"
   | "coal"
   | "iron"
+  | "feed"
   | `product${number}`;
 export type Worker = {
   id: string;
@@ -30,7 +31,6 @@ export const merchants = [
   "Tüccar Kemal",
   "Tüccar Asya",
 ] as const;
-export const EARLY_BONUS = 0.2;
 export const LATE_GRACE = 30;
 export type OrderDifficulty = "easy" | "medium" | "hard";
 export const orderDifficultyNames = {
@@ -66,6 +66,7 @@ export const resourceNames: Record<Resource, string> = {
   stone: "Taş",
   coal: "Kömür",
   iron: "Demir",
+  feed: "Yem",
 };
 export const resources: Resource[] = [
   "wood",
@@ -74,6 +75,7 @@ export const resources: Resource[] = [
   "stone",
   "coal",
   "iron",
+  "feed",
 ];
 export const levels: LevelId[] = Array.from({ length: 100 }, (_, i) => i + 1);
 export const MAX_LEVEL = 100;
@@ -89,10 +91,12 @@ export const resourceLevel: Record<Resource, LevelId> = {
   stone: 4,
   coal: 5,
   iron: 6,
+  feed: 7,
 };
-export const FIRST_ORDER_DELAY = 15;
-export const ORDER_DELAY_MIN = 15;
-export const ORDER_DELAY_MAX = 25;
+export const FIRST_ORDER_DELAY = 60;
+export const ORDER_DELAY_MIN = 60;
+export const ORDER_DELAY_MAX = 60;
+export const ORDER_BOARD_LIFETIME = 45;
 export type LaborNotice = {
   id: number;
   text: string;
@@ -111,19 +115,18 @@ export const togglePause = (state: GameState): GameState => ({
   paused: !state.paused,
 });
 export function skipToMorning(state: GameState): GameState {
-  if (isWorkingHours(state)) return state;
   const elapsed =
-    state.minuteOfDay >= WORK_END
+    state.minuteOfDay >= WORK_START
       ? 1440 - state.minuteOfDay + WORK_START
       : WORK_START - state.minuteOfDay;
   let resolved = state;
   for (let i = 0; i < elapsed && resolved.order; i++)
     resolved = simulateEconomy(resolved);
   const next =
-    state.minuteOfDay >= WORK_END ? payDailyWages(resolved) : resolved;
+    state.minuteOfDay >= WORK_START ? payDailyWages(resolved) : resolved;
   return refreshOrderPool({
     ...next,
-    day: state.day + (state.minuteOfDay >= WORK_END ? 1 : 0),
+    day: state.day + (state.minuteOfDay >= WORK_START ? 1 : 0),
     minuteOfDay: WORK_START,
     lastTick: Date.now(),
   });
@@ -139,6 +142,8 @@ export type GameState = {
   paused: boolean;
   shelterCapacity: number;
   warehouseCapacity: Record<Resource, number>;
+  basePrices: Record<Resource, number>;
+  marketPrices: Record<Resource, number>;
   laborEventIn: number;
   laborSequence: number;
   laborNotices: LaborNotice[];
@@ -310,6 +315,8 @@ const initialState = (): GameState => ({
   warehouseCapacity: Object.fromEntries(
     resources.map((resource) => [resource, 100]),
   ) as Record<Resource, number>,
+  basePrices: Object.fromEntries(resources.map((resource) => [resource, 10])) as Record<Resource, number>,
+  marketPrices: Object.fromEntries(resources.map((resource) => [resource, 10])) as Record<Resource, number>,
   laborEventIn: 240 + Math.floor(Math.random() * 241),
   laborSequence: 0,
   laborNotices: [],
@@ -396,8 +403,10 @@ export function simulateTick(state: GameState): GameState {
       lastTick: Date.now(),
     }),
   );
+  const repriced = elapsed % 60 === 0 ? updateMarketPrices(next) : next;
   return refreshOrderPool(
-    simulateLabor(elapsed >= 1440 ? payDailyWages(next) : next),
+    simulateLabor(elapsed >= 1440 ? payDailyWages(repriced) : repriced),
+    elapsed % 60 === 0,
   );
 }
 export function unlockLevel(state: GameState, level: LevelId): GameState {
@@ -725,21 +734,7 @@ function advanceLevel(state: GameState): GameState {
   return state;
 }
 export function orderPayout(order: Order): number {
-  return (
-    order.reward +
-    (order.remaining > order.duration * 0.2
-      ? Math.ceil(order.reward * EARLY_BONUS)
-      : 0)
-  );
-}
-function loseCredit(state: GameState, merchantId: number): GameState {
-  const merchantCredit = [...state.merchantCredit];
-  merchantCredit[merchantId] = Math.max(0, merchantCredit[merchantId] - 10);
-  return {
-    ...state,
-    merchantCredit,
-    orderPool: state.orderPool.filter((o) => o.merchantId !== merchantId),
-  };
+  return order.reward;
 }
 function finishOrder(state: GameState, success: boolean): GameState {
   if (!state.order) return state;
@@ -757,7 +752,7 @@ function finishOrder(state: GameState, success: boolean): GameState {
       : order.remaining > order.duration * 0.2
         ? "early"
         : "onTime";
-  const next = success ? state : loseCredit(state, order.merchantId);
+  const next = state;
   return addLedger(
     {
       ...next,
@@ -773,7 +768,7 @@ function finishOrder(state: GameState, success: boolean): GameState {
         reward,
       },
     },
-    `${merchants[order.merchantId]} · Sipariş #${order.id}: ${success ? `teslim edildi, +${reward}₺` : "tamamlanamadı, güven −10"}.`,
+    `Anonim sipariş #${order.id}: ${success ? `teslim edildi, +${reward}₺` : "tamamlanamadı"}.`,
   );
 }
 export function fulfillOrder(state: GameState): GameState {
@@ -792,28 +787,23 @@ export function acceptOrder(state: GameState, id: number): GameState {
     orderPool: state.orderPool.filter((o) => o.id !== id),
   };
 }
-// At most one batch per game day, including reloads and morning skips.
-export function refreshOrderPool(state: GameState): GameState {
-  if (state.offerDay >= state.day || !Object.keys(state.sites).length)
+export function refreshOrderPool(state: GameState, hourly = false): GameState {
+  if (!Object.keys(state.sites).length)
     return state;
+  const pool = (hourly ? [] : state.orderPool)
+    .map((offer) => ({ ...offer, remaining: offer.remaining - 1 }))
+    .filter((offer) => offer.remaining > 0);
+  if (!hourly && state.orderIn > 1)
+    return { ...state, orderIn: state.orderIn - 1, orderPool: pool };
   const seed = (Math.imul(state.seed, 1664525) + 1013904223) >>> 0;
-  const count =
-    dailyOrderMinimum(state.day) + Math.floor((seed / 4294967296) * 4);
-  let next = { ...state, seed, offerDay: state.day, orderPool: [] as Order[] };
-  for (let i = 0; i < count; i++) {
-    const difficulty: OrderDifficulty = (["easy", "medium", "hard"] as const)[
-      i % 3
-    ];
-    next = generateOffer(
-      next,
-      (seed + Math.floor(i / 3)) % merchants.length,
-      i === count - 1,
-      difficulty,
-    );
-  }
-  return addLedger(
-    next,
-    `${state.day}. gün: panoya ${count} kolay, orta ve zor sipariş eklendi.`,
+  const difficulty: OrderDifficulty = (["easy", "medium", "hard"] as const)[
+    Math.floor((seed / 4294967296) * 3)
+  ];
+  return generateOffer(
+    { ...state, orderPool: pool, orderIn: 0, seed },
+    0,
+    false,
+    difficulty,
   );
 }
 function simulateEconomy(state: GameState): GameState {
@@ -825,10 +815,9 @@ function simulateEconomy(state: GameState): GameState {
   if (next.order!.remaining === 0 && canFulfillOrder(next))
     return finishOrder(next, true);
   if (next.order!.remaining === -1) {
-    next = loseCredit(next, next.order!.merchantId);
     next = addLedger(
       next,
-      `${merchants[next.order!.merchantId]}: sipariş gecikti, güven −10.`,
+      `Anonim sipariş #${next.order!.id} gecikti.`,
     );
   }
   if (next.order!.remaining <= -LATE_GRACE) return finishOrder(next, false);
@@ -932,25 +921,19 @@ function generateOffer(
   );
   // Allow time to produce missing stock and reassign workers.
   const netRate = Math.max(0.2, crew * 0.1);
-  const duration = challenge
-    ? random(360, 540)
-    : Math.max(
-        random(60, 90),
-        Math.min(900, Math.ceil(missing / netRate) + 60),
-      );
+  const duration = 60;
   const reward = Math.ceil(
     resources.reduce(
-      (total, resource) =>
-        total + needs[resource] * levelInfo[resourceLevel[resource]].price,
+      (total, resource) => total + needs[resource] * marketPrice(next, resource),
       0,
     ) *
       (challenge
         ? 3
         : difficulty === "hard"
-          ? 2.5
+          ? 1.2
           : difficulty === "medium"
-            ? 2
-            : 1.5),
+            ? 1
+            : 0.8),
   );
   const order = {
     difficulty: challenge ? ("hard" as const) : difficulty,
@@ -959,14 +942,14 @@ function generateOffer(
     merchantId,
     id: next.orderSequence + 1,
     needs,
-    reward: Math.max(
-      1,
-      Math.floor(reward * (0.5 + next.merchantCredit[merchantId] / 200)),
-    ),
+    reward: Math.max(1, reward),
     duration,
     remaining: duration,
   };
-  const orderIn = random(ORDER_DELAY_MIN, ORDER_DELAY_MAX);
+  // Board visibility is predictable; profitability is shown as information,
+  // not used to make attractive offers disappear before they can be read.
+  order.remaining = ORDER_BOARD_LIFETIME;
+  const orderIn = random(15, 60);
   return {
     ...next,
     seed,
@@ -1080,6 +1063,22 @@ export function loadGame(raw: string | null): GameState {
         orderIn,
         orderQuantities,
         warehouseCapacity,
+        basePrices: Object.fromEntries(
+          resources.map((resource) => [
+            resource,
+            Number.isFinite(saved.basePrices?.[resource]) && saved.basePrices[resource] >= 0
+              ? saved.basePrices[resource]
+              : defaults.basePrices[resource],
+          ]),
+        ) as Record<Resource, number>,
+        marketPrices: Object.fromEntries(
+          resources.map((resource) => [
+            resource,
+            Number.isFinite(saved.marketPrices?.[resource]) && saved.marketPrices[resource] >= 0
+              ? saved.marketPrices[resource]
+              : defaults.marketPrices[resource],
+          ]),
+        ) as Record<Resource, number>,
         shelterCapacity,
         lastOrder: saved.lastOrder ? { penalty: 0, ...saved.lastOrder } : null,
         version: 16,
@@ -1140,11 +1139,12 @@ export const equipmentTypes = {
   pick: { name: "Kazma", price: 15, icon: "⛏️" },
   cart: { name: "El arabası", price: 20, icon: "🛒" },
   helmet: { name: "Baret", price: 10, icon: "⛑️" },
-  basket: { name: "Yumurta sepeti", price: 8, icon: "🧺" },
+  basket: { name: "Sepet", price: 8, icon: "🧺" },
   hoe: { name: "Çapa", price: 10, icon: "⚒️" },
   bucket: { name: "Süt kovası", price: 10, icon: "🪣" },
   shears: { name: "Kırkım makası", price: 12, icon: "✂️" },
   bow: { name: "Av yayı", price: 15, icon: "🏹" },
+  feed: { name: "Yem", price: 2, icon: "🌾" },
 };
 export type EquipmentType = keyof typeof equipmentTypes;
 export type Equipment = {
@@ -1209,7 +1209,7 @@ export const siteDefinitions: SiteDefinition[] = [
     category: "forest",
     job: "wood",
     icon: "🪵",
-    finite: true,
+    finite: false,
     equipment: ["axe", "gloves"],
     recipes: [],
   },
@@ -1250,7 +1250,7 @@ export const siteDefinitions: SiteDefinition[] = [
     job: milk,
     icon: "🐄",
     finite: false,
-    equipment: ["bucket", "gloves"],
+    equipment: ["bucket", "gloves", "feed"],
     recipes: [
       { output: milk, inputs: {} },
       { output: cream, inputs: { [milk]: 2 } },
@@ -1265,7 +1265,7 @@ export const siteDefinitions: SiteDefinition[] = [
     job: "egg",
     icon: "🥚",
     finite: false,
-    equipment: ["basket"],
+    equipment: ["basket", "feed"],
     recipes: [],
   },
   {
@@ -1275,7 +1275,7 @@ export const siteDefinitions: SiteDefinition[] = [
     job: wool,
     icon: "🐑",
     finite: false,
-    equipment: ["bucket", "shears", "gloves"],
+    equipment: ["bucket", "shears", "gloves", "feed"],
     recipes: [
       { output: wool, inputs: {} },
       { output: sheepMilk, inputs: {} },
@@ -1289,7 +1289,7 @@ export const siteDefinitions: SiteDefinition[] = [
       category: "mine",
       job: product(name),
       icon: "⛏️",
-      finite: true,
+      finite: name !== "Kömür",
       equipment: miningEquipment,
       recipes: [],
     }),
@@ -1297,6 +1297,33 @@ export const siteDefinitions: SiteDefinition[] = [
 ];
 export const siteProducts = (site: SiteDefinition): Resource[] =>
   site.recipes.length ? site.recipes.map((r) => r.output) : [site.job];
+const PRICE_LABOR = 20;
+export function marketPrice(state: GameState, resource: Resource, seen = new Set<Resource>()): number {
+  if (seen.has(resource)) return state.marketPrices[resource] ?? state.basePrices[resource] ?? 10;
+  const recipe = siteDefinitions.flatMap((site) => site.recipes).find(
+    (candidate) => candidate.output === resource && Object.keys(candidate.inputs).length > 0,
+  );
+  if (!recipe) return state.marketPrices[resource] ?? state.basePrices[resource] ?? 10;
+  const nextSeen = new Set(seen).add(resource);
+  const materialCost = Object.entries(recipe.inputs).reduce(
+    (sum, [input, amount]) => sum + marketPrice(state, input as Resource, nextSeen) * (amount ?? 0),
+    0,
+  );
+  return materialCost + PRICE_LABOR;
+}
+export function orderMarketValue(state: GameState, order: Order): number {
+  return resources.reduce((sum, resource) => sum + order.needs[resource] * marketPrice(state, resource), 0);
+}
+export function updateMarketPrices(state: GameState): GameState {
+  let seed = state.seed;
+  const marketPrices = { ...state.marketPrices };
+  for (const resource of resources) {
+    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+    const change = 0.9 + (seed / 4294967296) * 0.2;
+    marketPrices[resource] = Math.round((state.basePrices[resource] ?? 10) * change * 100) / 100;
+  }
+  return { ...state, seed, marketPrices };
+}
 export function ownedSite(
   state: GameState,
   resource: Resource,
@@ -1367,7 +1394,8 @@ export function buyEquipment(
         siteId: id,
         type,
         level: 1,
-        durability: 100,
+        // Yem ekipmanı, hayvan başına bir saatlik tüketimi temsil eder.
+        durability: type === "feed" ? 1 : 100,
       },
     ],
   });
@@ -1705,6 +1733,15 @@ function produce(state: GameState): GameState {
       if (kit.some((e) => !e)) break;
       kit.forEach((e) => used.add(e!.id));
       const speed = 20 + (Math.min(...kit.map((e) => e!.level)) - 1) * 5;
+      // Her hayvan (çalışan) çalışma saatinde bir yem tüketir. Saat başı
+      // kontrolü aynı gerçek saat içinde yalnızca bir kez yapılır.
+      if (
+        definition.category === "livestock" &&
+        next.minuteOfDay % 60 === 0
+      ) {
+        const feed = kit.find((e) => e!.type === "feed")!;
+        feed.durability = Math.max(0, feed.durability - 1);
+      }
       if (definition.recipes.length) {
         for (const recipe of definition.recipes) {
           if (kit.some((e) => e!.durability <= 0)) break;
@@ -1722,9 +1759,11 @@ function produce(state: GameState): GameState {
             task.remaining--;
             site.queue = site.queue.filter((q) => q.remaining > 0);
           }
-          kit.forEach((e) => {
-            e!.durability = Math.max(0, e!.durability - 1 / e!.level);
-          });
+          kit
+            .filter((e) => e!.type !== "feed")
+            .forEach((e) => {
+              e!.durability = Math.max(0, e!.durability - 1 / e!.level);
+            });
         }
         continue;
       }
@@ -1732,9 +1771,11 @@ function produce(state: GameState): GameState {
       if (worker.progress < 100) continue;
       next.stock[definition.job]++;
       if (definition.finite) site.extracted++;
-      kit.forEach((e) => {
-        e!.durability = Math.max(0, e!.durability - 1 / e!.level);
-      });
+      kit
+        .filter((e) => e!.type !== "feed")
+        .forEach((e) => {
+          e!.durability = Math.max(0, e!.durability - 1 / e!.level);
+        });
       worker.progress = 0;
     }
   }

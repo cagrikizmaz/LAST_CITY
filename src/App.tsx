@@ -19,7 +19,7 @@ export function App() {
       return g.emptyState();
     }
   });
-  const [screen, setScreen] = useState<"production" | "orders">("production");
+  const [screen, setScreen] = useState<"production" | "orders" | "management">("production");
   const [category, setCategory] = useState<g.Category | null>(null);
   const [siteId, setSiteId] = useState<string | null>(null);
   const act = (fn: (s: g.GameState) => g.GameState) => setState(fn);
@@ -72,7 +72,7 @@ export function App() {
         >
           <span className="brand-mark">K</span>
           <span>
-            <b>KÜLDEN</b>
+            <b>YENİ ŞAFAK</b>
             <small>Her emek, yeni bir şehir.</small>
           </span>
         </button>
@@ -86,6 +86,12 @@ export function App() {
             }}
           >
             Üretim
+          </button>
+          <button
+            aria-current={screen === "management" ? "page" : undefined}
+            onClick={() => setScreen("management")}
+          >
+            Yönetim
           </button>
           <button
             className="orders-link"
@@ -123,8 +129,8 @@ export function App() {
           >
             {state.paused ? "Devam et" : "Duraklat"}
           </button>
-          {!g.isWorkingHours(state) && (
-            <button onClick={() => act(g.skipToMorning)}>Sabaha geç</button>
+          {state.minuteOfDay < g.WORK_END && (
+            <button onClick={() => act(g.skipToMorning)}>Sonraki güne geç</button>
           )}
         </div>
         <details className="inventory-overview">
@@ -182,6 +188,51 @@ export function App() {
       {screen === "orders" ? (
         <main className="orders-screen">
           <OrderBoard state={state} act={act} />
+        </main>
+      ) : screen === "management" ? (
+        <main className="orders-screen">
+          <section className="panel order-card">
+            <span className="eyebrow">ŞEHİR YÖNETİMİ</span>
+            <h1>Fiyatlandırma tablosu</h1>
+            <p>
+              Piyasa fiyatları her oyun saatinde yaklaşık %10 değişir. Reçeteli
+              ürünlerde fiyat, malzeme maliyeti + {money(20)} işçilik olarak hesaplanır.
+            </p>
+            {g.categories.map((category) => {
+              const categoryResources = g.resources.filter((resource) => {
+                const site = g.ownedSite(state, resource);
+                return (
+                  (state.stock[resource] > 0 || site) &&
+                  site?.category === category.id
+                );
+              });
+              if (!categoryResources.length) return null;
+              return (
+                <section key={category.id} className="management-summary">
+                  <h2>{category.icon} {category.name}</h2>
+                  <div className="order-needs">
+                    {categoryResources.map((resource) => {
+                const recipe = g.siteDefinitions.flatMap((s) => s.recipes).find((r) => r.output === resource);
+                const derived = recipe && Object.keys(recipe.inputs).length > 0;
+                return (
+                  <div key={resource}>
+                    <span>
+                      {g.resourceNames[resource]}
+                      <small>{derived ? "Reçeteden hesaplanır" : "Temel ürün"}</small>
+                    </span>
+                    <b>{money(g.marketPrice(state, resource))}</b>
+                </div>
+                );
+                    })}
+                  </div>
+                </section>
+              );
+            })}
+            <p className="board-day">
+              Teklifler artık bu piyasa fiyatlarını kullanır; teklif tutarı piyasa
+              değerinin altında kalırsa siparişte zarar gösterilir.
+            </p>
+          </section>
         </main>
       ) : (
         <div className="category-layout">

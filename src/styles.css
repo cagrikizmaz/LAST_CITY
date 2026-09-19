@@ -512,6 +512,29 @@ h3 {
   color: #edc788;
   margin: 8px 0;
 }
+.offer-value-summary {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  flex-wrap: wrap;
+  margin: 0.45rem 0;
+  padding: 0.45rem 0.65rem;
+  border-radius: 0.55rem;
+  background: rgba(255, 255, 255, 0.06);
+  font-size: 0.82rem;
+}
+.offer-value-summary > span {
+  color: var(--muted, #9da8b5);
+}
+.offer-value-summary strong {
+  font-size: 0.86rem;
+}
+.offer-profit {
+  color: #65d391;
+}
+.offer-loss {
+  color: #ff7b7b;
+}
 .order-ticket span {
   font-size: 11px;
   color: #a9b59e;

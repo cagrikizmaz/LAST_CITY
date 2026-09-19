@@ -17,26 +17,15 @@ export function OrderBoard({
       <span className="eyebrow">TİCARET MERKEZİ</span>
       <h1>Sipariş panosu</h1>
       <p>
-        Her gün {g.dailyOrderMinimum(state.day)}–
-        {g.dailyOrderMinimum(state.day) + 3} yeni teklif. Kolay, orta ve zor
-        siparişler her oyun günü büyür. Kabul edilmeyen teklifler ertesi gün
-        yenilenir. Aynı anda bir sipariş üstlenebilirsin; süre kabul edince
-        başlar.
+        Siparişler anonim ve rastgele gelir. Pano her oyun saatinde tamamen
+        yenilenir; kârlı teklifler daha kısa, düşük kârlı veya zararlı teklifler
+        daha uzun süre görünür. Aynı anda bir sipariş üstlenebilirsin.
       </p>
-      <div className="merchant-credits">
-        {g.merchants.map((name, i) => (
-          <div key={name}>
-            <span>{name}</span>
-            <b>Güven {state.merchantCredit[i]}/100</b>
-            <small>Teklif değeri %{50 + state.merchantCredit[i] / 2}</small>
-          </div>
-        ))}
-      </div>
       {state.order ? (
         <>
           <div className="order-ticket">
             <small>
-              {g.merchants[state.order.merchantId]} · SİPARİŞ #{state.order.id}
+              Sipariş
             </small>
             <strong>+{money(g.orderPayout(state.order))}</strong>
             <span>
@@ -65,17 +54,14 @@ export function OrderBoard({
             Siparişi teslim et →
           </button>
           <p>
-            İlk %80 sürede teslim: %20 bonus. Son %20 sürede: normal bedel (
-            {money(state.order.reward)}). Süre sonunda stok yeterliyse normal
-            bedelle otomatik teslim.
+            Teslimat bedeli: {money(state.order.reward)}. Süre sonunda stok
+            yeterliyse otomatik teslim edilir.
           </p>
           <p>
-            Gecikme: güven −10. {g.LATE_GRACE} sn ek sürede tamamlanamazsa veya
-            vazgeçersen: güven −10. Düşük güven bu tüccarın yeni tekliflerini
-            ucuzlatır.
+            Gecikme veya vazgeçme siparişi başarısız sonuçlandırır.
           </p>
           <button onClick={() => act(g.abandonOrder)}>
-            Siparişten vazgeç (güven −10)
+            Siparişten vazgeç
           </button>
         </>
       ) : (
@@ -83,10 +69,10 @@ export function OrderBoard({
       )}
       <p className="board-day">
         {state.day}. gün · {state.orderPool.length} bekleyen teklif · Yeni pano:
-        ertesi gün
+        her saat
       </p>
       {!Object.keys(state.sites).length && (
-        <p>İlk sahanı kurduğunda tüccarlar teklif vermeye başlar.</p>
+        <p>İlk sahanı kurduğunda anonim siparişler gelmeye başlar.</p>
       )}
       {Object.keys(state.sites).length > 0 && !state.orderPool.length && (
         <p>Bugünün panosunda teklif kalmadı. Yeni teklifler yarın gelecek.</p>
@@ -125,12 +111,25 @@ export function OrderBoard({
                 {offer.challenge ? " · Yatırım siparişi" : ""}
               </b>
               <small>
-                {g.merchants[offer.merchantId]} · #{offer.id}
+                Sipariş
               </small>
               <strong>{money(offer.reward)}</strong>
+              <div className="offer-value-summary">
+                <span>Piyasa değeri: {money(g.orderMarketValue(state, offer))}</span>
+                <strong
+                  className={
+                    offer.reward >= g.orderMarketValue(state, offer)
+                      ? "offer-profit"
+                      : "offer-loss"
+                  }
+                >
+                  {offer.reward >= g.orderMarketValue(state, offer)
+                    ? `Kâr ${money(offer.reward - g.orderMarketValue(state, offer))}`
+                    : `Zarar ${money(g.orderMarketValue(state, offer) - offer.reward)}`}
+                </strong>
+              </div>
               <span>
-                {offer.duration} sn · Erken teslim +
-                {money(Math.ceil(offer.reward * g.EARLY_BONUS))}
+                {offer.duration} sn · Sabit teslim bedeli
               </span>
               <details>
                 <summary>Teklif detayları ve yatırım ihtiyacı</summary>
@@ -170,9 +169,21 @@ export function OrderBoard({
                 </div>
                 <button
                   disabled={!!state.order}
-                  onClick={() => act((s) => g.acceptOrder(s, offer.id))}
+                  onClick={() =>
+                    act((s) => {
+                      const accepted = g.acceptOrder(s, offer.id);
+                      const ready = g.resources.every(
+                        (resource) => state.stock[resource] >= offer.needs[resource],
+                      );
+                      return ready ? g.fulfillOrder(accepted) : accepted;
+                    })
+                  }
                 >
-                  Siparişi kabul et #{offer.id}
+                  {g.resources.every(
+                    (resource) => state.stock[resource] >= offer.needs[resource],
+                  )
+                    ? "Kabul et ve teslim et"
+                    : "Siparişi kabul et"}
                 </button>
               </details>
             </article>
@@ -181,12 +192,12 @@ export function OrderBoard({
       {state.lastOrder && (
         <p role="status">
           {state.lastOrder.outcome === "early"
-            ? "Erken teslim · bonuslu"
+            ? "Erken teslim"
             : state.lastOrder.outcome === "late"
               ? "Gecikmeli teslim"
               : state.lastOrder.success
                 ? "Zamanında teslim"
-                : "Tamamlanamadı · güven −10"}{" "}
+                : "Tamamlanamadı"}{" "}
           ·{" "}
           {money(
             state.lastOrder.success
