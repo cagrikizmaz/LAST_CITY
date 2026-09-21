@@ -1,10 +1,12 @@
-﻿import { useEffect, useRef, useState } from "react";
+import type { Dispatch } from "./commands";
+import { useEffect, useRef, useState } from "react";
 import * as g from "./game";
 type Props = {
   state: g.GameState;
-  act: (fn: (state: g.GameState) => g.GameState) => void;
+  act: Dispatch;
 };
 const people: Record<g.Category, { name: string; avatar: string }> = {
+  workshop: { name: "Eren", avatar: "🧑‍🔧" },
   hospital: { name: "Selin", avatar: "👩‍⚕️" },
   forest: { name: "Deniz", avatar: "🧑🏽‍🌾" },
   farm: { name: "Zeynep", avatar: "👩🏻‍🌾" },
@@ -112,6 +114,10 @@ export function EquipmentPurchase({
   const total = quantity * equipment.price;
   return (
     <div className="equipment-purchase">
+      <button disabled={state.stock[g.equipmentResources[type]] < quantity}
+        onClick={() => act({ type: "equipFromStock", args: [siteId, type, quantity] })}>
+        Stoktan kullan · {quantity} adet (Stok: {state.stock[g.equipmentResources[type]]})
+      </button>
       <div
         className="quantity-stepper"
         aria-label={`${equipment.name} alım miktarı`}
@@ -135,12 +141,7 @@ export function EquipmentPurchase({
       <button
         disabled={state.money < total}
         onClick={() =>
-          act((s) => {
-            if (s.money < total) return s;
-            for (let i = 0; i < quantity; i++)
-              s = g.buyEquipment(s, siteId, type);
-            return s;
-          })
+          act({ type: "buyEquipment", args: [siteId, type, quantity] })
         }
       >
         Satın al · {quantity} adet · {total.toLocaleString("tr-TR")}₺
@@ -236,9 +237,7 @@ export function ProductControls({
                     aria-label={`${label} üretimini azalt`}
                     disabled={!remaining}
                     onClick={() =>
-                      act((s) =>
-                        g.adjustProduction(s, definition.id, recipe.output, -1),
-                      )
+                      act({ type: "adjustProduction", args: [definition.id, recipe.output, -1] })
                     }
                   >
                     −
@@ -248,23 +247,14 @@ export function ProductControls({
                     max={g.productionCapacity(site) - total + remaining}
                     label={label}
                     commit={(quantity) =>
-                      act((s) =>
-                        g.setProduction(
-                          s,
-                          definition.id,
-                          recipe.output,
-                          quantity,
-                        ),
-                      )
+                      act({ type: "setProduction", args: [definition.id, recipe.output, quantity] })
                     }
                   />
                   <button
                     aria-label={`${label} üretimini artır`}
                     disabled={total >= g.productionCapacity(site)}
                     onClick={() =>
-                      act((s) =>
-                        g.adjustProduction(s, definition.id, recipe.output, 1),
-                      )
+                      act({ type: "adjustProduction", args: [definition.id, recipe.output, 1] })
                     }
                   >
                     +
@@ -392,7 +382,7 @@ export function AssistantDock({
               </span>
               <button
                 disabled={state.money < g.equipmentTypes[r.type].price}
-                onClick={() => act((s) => g.buyEquipment(s, r.site.id, r.type))}
+                onClick={() => act({ type: "buyEquipment", args: [r.site.id, r.type] })}
               >
                 1 adet al · {g.equipmentTypes[r.type].price}₺
               </button>
@@ -478,7 +468,7 @@ export function HospitalSupplies({ state, act }: Props) {
               !state.hospital.level ||
               state.money < g.medicalSupplies[type].price
             }
-            onClick={() => act((s) => g.buyMedicalSupply(s, type))}
+            onClick={() => act({ type: "buyMedicalSupply", args: [type] })}
           >
             {g.medicalSupplies[type].name} al · {g.medicalSupplies[type].price}₺
           </button>
@@ -517,7 +507,7 @@ export function HospitalPanel({ state, act }: Props) {
           state.hospital.level >= 20 ||
           state.money < g.hospitalUpgradeCost(state)
         }
-        onClick={() => act(g.upgradeHospital)}
+        onClick={() => act({ type: "upgradeHospital", args: [] })}
       >
         {state.hospital.level === 0 ? "Hastaneyi kur" : "Hastaneyi yükselt"} ·{" "}
         {g.hospitalUpgradeCost(state)}₺
@@ -526,14 +516,14 @@ export function HospitalPanel({ state, act }: Props) {
         disabled={
           state.hospital.doctors >= g.doctorCapacity(state) || state.money < 50
         }
-        onClick={() => act(g.hireDoctor)}
+        onClick={() => act({ type: "hireDoctor", args: [] })}
       >
         Doktor al · 50₺
       </button>
       <h3>Hastalar · {patients.length}</h3>
       <p>
         İyileşme: 10 gerçek dakika; kesintisiz tedavi: 5 gerçek dakika. Hastalık
-        başına %1 ölüm riski vardır. Tedavi gün boyu sürer; duraklatıldığında
+        başına %1 ölüm riski vardır. Tedavi saatten bağımsız sürer; duraklatıldığında
         sayaçlar durur.
       </p>
       {patients.length === 0 && <p>Hasta işçi yok.</p>}

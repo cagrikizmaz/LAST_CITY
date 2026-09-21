@@ -76,7 +76,7 @@ it("edits a production target while ticks continue and clamps to capacity", asyn
 });
 it("browses categories, buys a site and equipment, assigns staff and persists production", async () => {
   await render();
-  expect(container.querySelectorAll(".category-card")).toHaveLength(5);
+  expect(container.querySelectorAll(".category-card")).toHaveLength(6);
   await click("Orman");
   expect(container.querySelectorAll(".production-card")).toHaveLength(2);
   await click("Oduncu");
@@ -189,11 +189,21 @@ it("pauses timers and skips from evening to morning with wage settlement", async
   await click("Duraklat");
   await act(async () => vi.advanceTimersByTime(3000));
   expect(saved().minuteOfDay).toBe(1200);
-  await click("Sabaha geç");
+  await click("Sonraki güne geç");
   expect(saved().minuteOfDay).toBe(480);
   expect(saved().money).toBe(242.5);
   expect(saved().day).toBe(2);
 });
+it.each([480, 900, 1199, 1200, 1439, 0, 479])(
+  "keeps the morning shortcut available at minute %i",
+  async (minuteOfDay) => {
+    await render({ ...g.emptyState(), minuteOfDay, paused: true });
+    await click("Sonraki güne geç");
+    expect(saved().minuteOfDay).toBe(480);
+    expect(saved().day).toBe(minuteOfDay >= 480 ? 2 : 1);
+    expect(saved().money).toBe(minuteOfDay >= 480 ? 242.5 : 250);
+  },
+);
 it("removes saved broken equipment and requests a replacement", async () => {
   let state = g.buyEquipment(
     g.purchaseSite(g.emptyState(), "lumber"),

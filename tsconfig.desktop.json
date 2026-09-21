@@ -1,0 +1,5 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": { "types": ["node"], "lib": ["ES2022", "DOM"] },
+  "include": ["desktop/**/*.ts", "src/game.ts", "src/commands.ts", "src/lanProtocol.ts"]
+}

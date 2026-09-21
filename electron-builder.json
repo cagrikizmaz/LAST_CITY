@@ -1,0 +1,41 @@
+{
+  "appId": "com.kulden.game.desktop",
+  "productName": "Farming",
+  "electronDist": "node_modules/electron/dist",
+  "directories": {
+    "app": "desktop-build",
+    "output": "artifacts/windows"
+  },
+  "files": [
+    "main.cjs",
+    "preload.cjs",
+    "web/**/*",
+    "package.json",
+    "!node_modules/**/*"
+  ],
+  "asar": true,
+  "npmRebuild": false,
+  "win": {
+    "target": [
+      {
+        "target": "nsis",
+        "arch": [
+          "x64"
+        ]
+      }
+    ],
+    "signAndEditExecutable": false
+  },
+  "artifactName": "Farming-Kurulum.exe",
+  "compression": "maximum",
+  "electronLanguages": [
+    "tr",
+    "en-US"
+  ],
+  "nsis": {
+    "oneClick": false,
+    "allowToChangeInstallationDirectory": true,
+    "createDesktopShortcut": true,
+    "createStartMenuShortcut": true
+  }
+}

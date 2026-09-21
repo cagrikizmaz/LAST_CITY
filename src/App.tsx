@@ -1,4 +1,8 @@
-﻿import { useEffect, useState } from "react";
+import { useState } from "react";
+import { useGameSession } from "./useGameSession";
+import { ResourceMarket } from "./ResourceMarket";
+import { PlayerMarket } from "./PlayerMarket";
+import { NetworkPanel } from "./NetworkPanel";
 import * as g from "./game";
 import { OrderBoard } from "./OrderBoard";
 import {
@@ -8,33 +12,14 @@ import {
   EquipmentPurchase,
   ProductControls,
 } from "./ProductionPanels";
-const saveKey = "last-city-workers-v2";
 const money = (n: number) =>
   `${n.toLocaleString("tr-TR", { maximumFractionDigits: 2 })}₺`;
 export function App() {
-  const [state, setState] = useState(() => {
-    try {
-      return g.refreshOrderPool(g.loadGame(localStorage.getItem(saveKey)));
-    } catch {
-      return g.emptyState();
-    }
-  });
-  const [screen, setScreen] = useState<"production" | "orders" | "management">("production");
+  const session = useGameSession();
+  const { state, act } = session;
+  const [screen, setScreen] = useState<"production" | "orders" | "management" | "multiplayer" | "market">("production");
   const [category, setCategory] = useState<g.Category | null>(null);
   const [siteId, setSiteId] = useState<string | null>(null);
-  const act = (fn: (s: g.GameState) => g.GameState) => setState(fn);
-  useEffect(() => {
-    if (state.paused) return;
-    const timer = window.setInterval(() => act(g.simulateTick), 1000);
-    return () => window.clearInterval(timer);
-  }, [state.paused]);
-  useEffect(() => {
-    try {
-      localStorage.setItem(saveKey, JSON.stringify(state));
-    } catch {
-      /* Optional storage. */
-    }
-  }, [state]);
   const definition = g.siteDefinitions.find((s) => s.id === siteId);
   const site = siteId ? state.sites[siteId] : undefined;
   const manager = g.categories.find((c) => c.id === category);
@@ -112,26 +97,29 @@ export function App() {
               </small>
             )}
           </button>
+          <button aria-current={screen === "market" ? "page" : undefined} onClick={() => setScreen("market")}>
+            Oyuncu pazarı
+          </button>
         </nav>
         <div className="clock-controls" aria-label="Oyun saati">
           <div>
-            <small>{state.day}. GÜN</small>
+            <small>{state.timeMode === "continuous" ? "24 SAAT" : `${state.day}. GÜN`}</small>
             <strong>{g.formatGameTime(state.minuteOfDay)}</strong>
             <span>
-              {g.isWorkingHours(state)
+              {state.timeMode === "continuous" ? "Kesintisiz üretim" : g.isWorkingHours(state)
                 ? "Mesai 08:00–20:00"
                 : "Dinlenme zamanı"}
             </span>
           </div>
           <button
             aria-pressed={state.paused}
-            onClick={() => act(g.togglePause)}
+            onClick={() => act({ type: "togglePause", args: [] })}
           >
             {state.paused ? "Devam et" : "Duraklat"}
           </button>
-          {state.minuteOfDay < g.WORK_END && (
-            <button onClick={() => act(g.skipToMorning)}>Sonraki güne geç</button>
-          )}
+          {state.timeMode !== "continuous" && <button className="next-day-button" onClick={() => act({ type: "skipToMorning", args: [] })}>
+            Sonraki güne geç
+          </button>}
         </div>
         <details className="inventory-overview">
           <summary>
@@ -175,8 +163,9 @@ export function App() {
         </div>
         <button
           className="quiet"
+          disabled={session.status !== "offline"}
           onClick={() => {
-            act(g.emptyState);
+            act({ type: "newGame", args: [] });
             setScreen("production");
             setCategory(null);
             setSiteId(null);
@@ -184,10 +173,30 @@ export function App() {
         >
           Yeni oyun
         </button>
+        <button
+          className="quiet"
+          aria-current={screen === "multiplayer" ? "page" : undefined}
+          onClick={() => setScreen("multiplayer")}
+        >
+          Multiplayer{session.status === "disconnected" ? " · Bağlantı kesildi" : ""}
+        </button>
       </header>
-      {screen === "orders" ? (
+      <div className="market-notices" role="status" aria-live="polite" aria-label="Pazar bildirimleri">
+        {session.marketNotices.map((offer) => <div className="market-notice" key={offer.id}>
+          <span><strong>{offer.sellerName}</strong>, {offer.quantity} adet {g.resourceNames[offer.resource]} ürününü {money(offer.total)} toplam fiyatla satışa çıkardı.</span>
+          <button onClick={() => { setScreen("market"); session.dismissMarketNotice(offer.id); }}>Pazara git</button>
+          <button aria-label="Pazar bildirimini kapat" onClick={() => session.dismissMarketNotice(offer.id)}>×</button>
+        </div>)}
+      </div>
+      <NetworkPanel session={session} active={screen === "multiplayer"} />
+      <fieldset className="game-content" hidden={screen === "multiplayer"} disabled={session.status === "connecting" || session.status === "disconnected"}>
+      {screen === "market" ? (
         <main className="orders-screen">
-          <OrderBoard state={state} act={act} />
+          <><ResourceMarket state={state} act={act} /><PlayerMarket session={session} openMultiplayer={() => setScreen("multiplayer")} /></>
+        </main>
+      ) : screen === "orders" ? (
+        <main className="orders-screen">
+          <OrderBoard state={state} act={act} session={session} />
         </main>
       ) : screen === "management" ? (
         <main className="orders-screen">
@@ -282,12 +291,7 @@ export function App() {
                   <button
                     aria-label="Bildirimi kapat"
                     onClick={() =>
-                      act((s) => ({
-                        ...s,
-                        laborNotices: s.laborNotices.filter(
-                          (x) => x.id !== n.id,
-                        ),
-                      }))
+                      act({ type: "dismissNotice", args: [n.id] })
                     }
                   >
                     ×
@@ -378,7 +382,7 @@ export function App() {
                 <button
                   className="primary"
                   disabled={state.money < g.sitePurchaseCost(state)}
-                  onClick={() => act((s) => g.purchaseSite(s, definition.id))}
+                  onClick={() => act({ type: "purchaseSite", args: [definition.id] })}
                 >
                   Sahayı satın al · {money(g.sitePurchaseCost(state))}
                 </button>
@@ -421,7 +425,7 @@ export function App() {
                     disabled={
                       site.level >= 20 || state.money < g.siteUpgradeCost(site)
                     }
-                    onClick={() => act((s) => g.upgradeSite(s, definition.id))}
+                    onClick={() => act({ type: "upgradeSite", args: [definition.id] })}
                   >
                     {site.level >= 20
                       ? "En yüksek seviye"
@@ -435,7 +439,7 @@ export function App() {
                     <button
                       disabled={!assigned.some((w) => !w.illnessRemaining)}
                       onClick={() =>
-                        act((s) => g.changeWorkers(s, definition.job, -1))
+                        act({ type: "changeWorkers", args: [definition.job, -1] })
                       }
                     >
                       − İşçi çıkart
@@ -450,7 +454,7 @@ export function App() {
                             state.workers.length >= state.shelterCapacity)
                       }
                       onClick={() =>
-                        act((s) => g.hireForJob(s, definition.job))
+                        act({ type: "hireForJob", args: [definition.job] })
                       }
                     >
                       {idleWorkers.length > 0
@@ -494,7 +498,7 @@ export function App() {
                           disabled={
                             state.money < g.warehouseUpgradeCost(state, r)
                           }
-                          onClick={() => act((s) => g.upgradeWarehouse(s, r))}
+                          onClick={() => act({ type: "upgradeWarehouse", args: [r] })}
                         >
                           Depoyu +100 yükselt ·{" "}
                           {money(g.warehouseUpgradeCost(state, r))}
@@ -587,12 +591,7 @@ export function App() {
                                       <button
                                         disabled={count === 0}
                                         onClick={() =>
-                                          act((s) =>
-                                            g.upgradeEquipmentGroup(
-                                              s,
-                                              group.map((item) => item.id),
-                                            ),
-                                          )
+                                          act({ type: "upgradeEquipmentGroup", args: [group.map((item) => item.id)] })
                                         }
                                       >
                                         {e.level >= 10
@@ -647,7 +646,7 @@ export function App() {
                   </div>
                 </dl>
                 <p>
-                  Günlük maaş: <strong>{money(g.dailyPayroll(state))}</strong>
+                  {state.timeMode === "continuous" ? "24 saatlik maaş" : "Günlük maaş"}: <strong>{money(g.dailyPayroll(state))}</strong>
                   <br />
                   Kişi başı {money(g.dailyWagePerWorker(state))} · İşçi alım
                   bedelinin %10’u
@@ -675,7 +674,7 @@ export function App() {
                 </dl>
                 <button
                   disabled={state.money < g.shelterCost(state)}
-                  onClick={() => act(g.buildShelter)}
+                  onClick={() => act({ type: "buildShelter", args: [] })}
                 >
                   Barınak +3 · {money(g.shelterCost(state))}
                 </button>
@@ -685,6 +684,7 @@ export function App() {
         </div>
       )}
       <AssistantDock state={state} act={act} openSite={openSite} />
+      </fieldset>
     </div>
   );
 }

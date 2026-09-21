@@ -8,5 +8,6 @@ vite.config.d.ts
 !.env.example
 *.log
 artifacts/
+desktop-build/
 *.jks
 *.keystore

@@ -1,3 +1,5 @@
+import type { useGameSession } from "./useGameSession";
+import type { Dispatch } from "./commands";
 import { useState } from "react";
 import * as g from "./game";
 const money = (n: number) =>
@@ -5,9 +7,11 @@ const money = (n: number) =>
 export function OrderBoard({
   state,
   act,
+  session,
 }: {
   state: g.GameState;
-  act: (fn: (s: g.GameState) => g.GameState) => void;
+  act: Dispatch;
+  session?: ReturnType<typeof useGameSession>;
 }) {
   const [filter, setFilter] = useState<g.OrderDifficulty | "all">("all");
   const difficultyOf = (offer: g.Order) =>
@@ -16,6 +20,28 @@ export function OrderBoard({
     <section className="panel order-card">
       <span className="eyebrow">TİCARET MERKEZİ</span>
       <h1>Sipariş panosu</h1>
+      {session?.status === "connected" && session.snapshot && <>
+        <h2>Oyuncu siparişleri</h2>
+        {session.error && <p className="network-error" role="alert">{session.error}</p>}
+        <p>Oyuncu pazarından verilen siparişler. Teslimatta ürünler alıcıya, ödeme satıcıya aktarılır.</p>
+        <div className="player-market">
+          {!(session.snapshot.orders ?? []).length && <p>Henüz oyuncu siparişi yok.</p>}
+          {(session.snapshot.orders ?? []).map((order) => {
+            const own = order.buyerId === session.snapshot!.playerId;
+            const enough = state.stock[order.resource] >= order.quantity;
+            return <article key={order.id} className="player-offer">
+              <small>{order.buyerName}{own ? " · Senin siparişin" : ""}</small>
+              <strong>{order.quantity} {g.resourceNames[order.resource]}</strong>
+              <span>{money(order.total)} toplam ödeme</span>
+              <button disabled={!own && !enough} onClick={() => {
+                session.setError("");
+                session.send({ type: own ? "cancelPlayerOrder" : "fulfillPlayerOrder", id: order.id });
+              }}>{own ? "Siparişi iptal et" : enough ? "Siparişi teslim et" : "Stok yetersiz"}</button>
+            </article>;
+          })}
+        </div>
+        <h2>Anonim siparişler</h2>
+      </>}
       <p>
         Siparişler anonim ve rastgele gelir. Pano her oyun saatinde tamamen
         yenilenir; kârlı teklifler daha kısa, düşük kârlı veya zararlı teklifler
@@ -49,7 +75,7 @@ export function OrderBoard({
           <button
             className="primary fulfill-button"
             disabled={!g.canFulfillOrder(state)}
-            onClick={() => act(g.fulfillOrder)}
+            onClick={() => act({ type: "fulfillOrder", args: [] })}
           >
             Siparişi teslim et →
           </button>
@@ -60,7 +86,7 @@ export function OrderBoard({
           <p>
             Gecikme veya vazgeçme siparişi başarısız sonuçlandırır.
           </p>
-          <button onClick={() => act(g.abandonOrder)}>
+          <button onClick={() => act({ type: "abandonOrder", args: [] })}>
             Siparişten vazgeç
           </button>
         </>
@@ -68,14 +94,14 @@ export function OrderBoard({
         <p>Henüz kabul edilmiş sipariş yok.</p>
       )}
       <p className="board-day">
-        {state.day}. gün · {state.orderPool.length} bekleyen teklif · Yeni pano:
+        {state.timeMode === "continuous" ? "24 saat üretim" : `${state.day}. gün`} · {state.orderPool.length} bekleyen teklif · Yeni pano:
         her saat
       </p>
       {!Object.keys(state.sites).length && (
         <p>İlk sahanı kurduğunda anonim siparişler gelmeye başlar.</p>
       )}
       {Object.keys(state.sites).length > 0 && !state.orderPool.length && (
-        <p>Bugünün panosunda teklif kalmadı. Yeni teklifler yarın gelecek.</p>
+        <p>Panoda teklif kalmadı. Yeni teklifler bir sonraki oyun saatinde gelecek.</p>
       )}
       <div className="order-filters" aria-label="Sipariş zorluğu">
         {(["all", "easy", "medium", "hard"] as const).map((kind) => (
@@ -170,13 +196,7 @@ export function OrderBoard({
                 <button
                   disabled={!!state.order}
                   onClick={() =>
-                    act((s) => {
-                      const accepted = g.acceptOrder(s, offer.id);
-                      const ready = g.resources.every(
-                        (resource) => state.stock[resource] >= offer.needs[resource],
-                      );
-                      return ready ? g.fulfillOrder(accepted) : accepted;
-                    })
+                    act({ type: "acceptOrder", args: [offer.id] })
                   }
                 >
                   {g.resources.every(

@@ -62,7 +62,23 @@ Oyun `last-city-workers-v2` anahtarıyla tarayıcıya kaydedilir; çevrimdışı
 
 Hastane ana kategoridedir. İlk seviye 2 doktor kapasitesi verir; her seviye +2 kapasite ekler. Doktor 50₺ karşılığında alınır ve 2 hastaya bakar. Hastalık 600 saniye, kesintisiz tedavi 300 saniye sürer. Her tedavi 1 iğne, 1 ağrı kesici ve 1 antibiyotik tüketir; eksikleri hastane müdürü bildirir. Hastalık başına ölüm olasılığı %1’dir. Ekipmansız geçirilen 600 mesai saniyesi istifaya yol açar; ekipman sağlanınca sayaç sıfırlanır. Dinlenme ve hastalık süreleri istifa sayacını ilerletmez. Sabaha geçmek gerçek süre sayaçlarını ilerletmez.
 
-## Android APK
+## Windows ve aynı ağda çok oyunculu oyun
+
+Windows 64 bit: `artifacts/windows/Farming-Kurulum.exe`. Bir kez kurun, ardından masaüstündeki Farming kısayolunu kullanın. Kurulumsuz çalıştırmak için `artifacts/windows/win-unpacked/Farming.exe` açılabilir; klasördeki diğer dosyalar birlikte tutulmalıdır. Eski tek dosyalık `Farming.exe` önceki sürümdür. Yeniden üretmek için `EXE-Olustur.bat` dosyasına çift tıklayın veya `npm run desktop:exe` çalıştırın. Yeni paket maksimum sıkıştırma ve Türkçe/İngilizce arayüz kaynaklarıyla hazırlanır; kurulu uygulama açılışta geçici klasöre paket açmaz.
+
+1. Bir bilgisayarda Farming'i açın. **Multiplayer** bölümünde oyuncu adını ve isteğe bağlı oda adını yazıp **Oda kur** düğmesine basın.
+2. Diğer bilgisayarlar ve Android telefonlar aynı Wi-Fi/yerel ağa bağlansın. **Multiplayer → Açık odalar** listesinden odayı seçip ev sahibinin paylaştığı **katılım koduyla** katılsınlar. Liste otomatik yenilenir; **Listeyi yenile** ile de arama yapılabilir.
+3. Her oyuncunun ayrı çiftliği, parası, saati ve işçileri vardır. **Oyuncu pazarı** bölümünde stoktan satış ilanı açılır; diğer oyuncu ilandaki miktarın tamamını belirtilen toplam ücretle alır.
+
+Odayı Windows EXE açar; APK odalara katılır. İnternet veya hesap gerekmez. Oda sahibi bilgisayar açık kalmalıdır. Windows güvenlik duvarı sorarsa özel ağ erişimine izin verin. Odalar yerel ağ yayınıyla otomatik bulunur; bağlantı bilgilerini oyuncuların bulması veya yazması gerekmez. Misafir Wi-Fi veya cihaz yalıtımı oda bulmayı engelleyebilir. Bu özellik için hem EXE hem APK 1.2 sürümüne güncellenmelidir.
+
+Tek oyunculu kayıt korunur. İlk ağ katılımında ayrı çiftlik açılır; çevrim içi çiftlikler ev sahibinin `%APPDATA%/Farming/lan-room.json` dosyasında saklanır. Aynı cihaz ve oyuncu adıyla aynı odaya dönünce çiftliğe dönülür. Kayıtlar kalıcı oda kimliğine bağlıdır; ağ adresi değişse de korunur. Uygulama verilerini temizlemek oyuncu anahtarını siler. Önceki sürümdeki kayıtlar ilk katılımda eski bağlantı bilgisi eşleşiyorsa yeni oda kimliğine aktarılır. Bağlı olmayan oyuncunun üretimi durur; açık satış ilanları satın alınabilir. Oda yeniden açıldığında kayıtlar ve ilanlar yüklenir. Oda en fazla 16 oyuncu kaydı tutar.
+
+Alım satım ve oyun komutları sunucuda doğrulanır. Aynı ilan bir kez satılır; bakiye, stok ve depo kontrol edilir. Satış ilanı stok ayırmaz; ürün başka yerde kullanılmışsa satın alma reddedilir. Duraklatma ve sonraki güne geçiş yalnızca kendi çiftliğini etkiler. Çevrim içi çiftlik sıfırlama kapalıdır.
+
+Doğrulama: `npm run test:lan`; Android Java tarayıcısı ile masaüstü oda keşfi: `npm run test:android-discovery`. Gerçek Electron arayüzü ve iki ayrı uygulamayla test: `npm run desktop:prepare` ardından `node scripts/smoke-desktop.mjs`. Paketlenmiş sürüm: `node scripts/smoke-desktop.mjs --packaged`. Java ağ testi ve telefon boyutundaki ekran testi fiziksel Android testi yerine geçmez. Teknik olarak oyun TCP 4765, otomatik oda keşfi UDP 4766 kullanır; katılım kodu keşif yanıtlarında yayınlanmaz.
+
+## APK üretme kısayolu
 
 `APK-Olustur.bat` dosyasına çift tıklayın. Güncel oyun derlenir ve APK konumu açılır: `artifacts/Farming.apk` (debug). Terminal: `npm run android:apk`.
 

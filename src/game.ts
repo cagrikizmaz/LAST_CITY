@@ -107,7 +107,8 @@ export const WORK_START = 8 * 60;
 export const WORK_END = 20 * 60;
 export const MINUTES_PER_TICK = 1;
 export const isWorkingHours = (state: GameState): boolean =>
-  state.minuteOfDay >= WORK_START && state.minuteOfDay < WORK_END;
+  state.timeMode === "continuous" ||
+  (state.minuteOfDay >= WORK_START && state.minuteOfDay < WORK_END);
 export const formatGameTime = (minute: number): string =>
   `${String(Math.floor(minute / 60)).padStart(2, "0")}:${String(minute % 60).padStart(2, "0")}`;
 export const togglePause = (state: GameState): GameState => ({
@@ -115,6 +116,7 @@ export const togglePause = (state: GameState): GameState => ({
   paused: !state.paused,
 });
 export function skipToMorning(state: GameState): GameState {
+  if (state.timeMode === "continuous") return state;
   const elapsed =
     state.minuteOfDay >= WORK_START
       ? 1440 - state.minuteOfDay + WORK_START
@@ -133,6 +135,7 @@ export function skipToMorning(state: GameState): GameState {
 }
 
 export type GameState = {
+  timeMode?: "continuous";
   hospital: Hospital;
   sites: Record<string, SiteState>;
   equipment: Equipment[];
@@ -399,7 +402,7 @@ export function simulateTick(state: GameState): GameState {
       stock,
       workers,
       minuteOfDay: elapsed % 1440,
-      day: state.day + Math.floor(elapsed / 1440),
+      day: state.timeMode === "continuous" ? state.day : state.day + Math.floor(elapsed / 1440),
       lastTick: Date.now(),
     }),
   );
@@ -486,7 +489,7 @@ function payDailyWages(state: GameState): GameState {
   const amount = dailyPayroll(state);
   return addLedger(
     { ...state, money: Math.round((state.money - amount) * 100) / 100 },
-    `Günlük işçi ücretleri: ${state.workers.length} işçi, −${amount.toLocaleString("tr-TR")}₺.`,
+    `${state.timeMode === "continuous" ? "24 saatlik" : "Günlük"} işçi ücretleri: ${state.workers.length} işçi, −${amount.toLocaleString("tr-TR")}₺.`,
   );
 }
 
@@ -843,11 +846,12 @@ function generateOffer(
     next.workers.filter((w) => isHoused(next, w.id) && !w.illnessRemaining)
       .length,
   );
-  const dayGrowth = 1 + (state.day - 1) * 0.08;
+  const progression = state.timeMode === "continuous" ? state.level : state.day;
+  const dayGrowth = 1 + (progression - 1) * 0.08;
   const tier = difficulty === "easy" ? 1 : difficulty === "medium" ? 2 : 3;
   const count = Math.min(
     available.length,
-    tier + Math.floor((state.day - 1) / 5),
+    tier + Math.floor((progression - 1) / 5),
   );
   const averageStock =
     available.reduce((sum, resource) => sum + next.stock[resource], 0) /
@@ -937,7 +941,7 @@ function generateOffer(
   );
   const order = {
     difficulty: challenge ? ("hard" as const) : difficulty,
-    dayLevel: state.day,
+    dayLevel: progression,
     challenge,
     merchantId,
     id: next.orderSequence + 1,
@@ -1115,7 +1119,7 @@ function normalizeHospital(value: Partial<Hospital> | undefined): Hospital {
     ) as Record<MedicalSupply, number>,
   };
 }
-export type Category = "forest" | "farm" | "livestock" | "mine" | "hospital";
+export type Category = "forest" | "farm" | "livestock" | "mine" | "hospital" | "workshop";
 export const categories: {
   id: Category;
   name: string;
@@ -1131,6 +1135,7 @@ export const categories: {
     manager: "Hayvancılık Müdürü",
   },
   { id: "mine", name: "Maden", icon: "⛏️", manager: "Maden Müdürü" },
+  { id: "workshop", name: "Atölyeler", icon: "⚒️", manager: "Üretim Müdürü" },
   { id: "hospital", name: "Hastane", icon: "🏥", manager: "Hastane Müdürü" },
 ];
 export const equipmentTypes = {
@@ -1221,7 +1226,7 @@ export const siteDefinitions: SiteDefinition[] = [
     icon: "🏹",
     finite: false,
     equipment: ["bow", "gloves"],
-    recipes: [],
+    recipes: [{ output: product("Et"), inputs: {} }, { output: product("Deri"), inputs: {} }],
   },
   {
     id: "field",
@@ -1295,6 +1300,44 @@ export const siteDefinitions: SiteDefinition[] = [
     }),
   ),
 ];
+// Register after the existing catalog to preserve resource IDs in saved games.
+siteDefinitions.find(s => s.id === "lumber")!.recipes = [{ output: "wood", inputs: {} }, { output: product("Çubuk"), inputs: {} }];
+const recipe = (output: string, inputs: Record<string, number>): Recipe => ({
+  output: product(output),
+  inputs: Object.fromEntries(Object.entries(inputs).map(([name, count]) => [product(name), count])),
+});
+const workshops: [string, string, string, Recipe[]][] = [
+  ["weaver", "Sepet ve Dokuma Atölyesi", "⚒️", [recipe("Sepet", { "Çubuk": 3 }), recipe("İplik", { "Yün": 2 }), recipe("Kumaş", { "İplik": 2 }), recipe("Halat", { "İplik": 2 })]],
+  ["furnace", "Fırın", "⚒️", [recipe("Hamdemir", { "Demir": 2, "Kömür": 1 }), recipe("Tuğla", { "Kil": 2, "Kömür": 1 }), recipe("Cam", { "Kum": 2, "Kömür": 1 })]],
+  ["carpenter", "Marangoz", "⚒️", [recipe("Kereste", { "Odun": 2 }), recipe("Av yayı", { "Çubuk": 2, "Halat": 1 }), recipe("El Arabası", { "Kereste": 3, "Hamdemir": 1 }), recipe("Mobilya", { "Kereste": 4, "Çivi": 2 })]],
+  ["smith", "Demirci Atölyesi", "⚒️", [recipe("Kazma", { "Hamdemir": 2, "Kereste": 1 }), recipe("Kürek", { "Hamdemir": 1, "Kereste": 1 }), recipe("Balta", { "Hamdemir": 1, "Kereste": 1 }), recipe("Çapa", { "Hamdemir": 1, "Kereste": 1 }), recipe("Süt kovası", { "Hamdemir": 2 }), recipe("Kırkım makası", { "Hamdemir": 2 }), recipe("Çivi", { "Hamdemir": 1 }), recipe("Baret", { "Hamdemir": 1, "Deri": 1 })]],
+  ["mill", "Değirmen", "⚒️", [recipe("Yem", { "Buğday": 1 }), recipe("Un", { "Buğday": 2 })]],
+  ["tailor", "Terzi", "⚒️", [recipe("Eldiven", { "Deri": 1 }), recipe("Giysi", { "Kumaş": 2 }), recipe("Bot", { "Deri": 2 }), recipe("Battaniye", { "Yün": 3 })]],
+  ["bakery", "Ekmek Fırını", "🍞", [recipe("Ekmek", { "Un": 2, "Kömür": 1 })]],
+];
+for (const [id, name, icon, recipes] of workshops) siteDefinitions.push({
+  id, name, icon, recipes, category: "workshop", job: recipes[0].output,
+  finite: false, equipment: ["gloves"],
+});
+export const equipmentResources = Object.fromEntries(Object.entries(equipmentTypes).map(([type, info]) =>
+  [type, product(type === "cart" ? "El Arabası" : info.name)],
+)) as Record<EquipmentType, Resource>;
+export const tradeResources = [...new Set(siteDefinitions.flatMap(s => s.recipes.length ? s.recipes.map(r => r.output) : [s.job]))];
+export function tradeResource(state: GameState, resource: Resource, quantity: number, direction: "buy" | "sell"): GameState {
+  if (!tradeResources.includes(resource) || !Number.isSafeInteger(quantity) || quantity <= 0 || (direction !== "buy" && direction !== "sell")) return state;
+  const total = Math.round(marketPrice(state, resource) * quantity * (direction === "buy" ? 1.2 : 0.8) * 100) / 100;
+  if (direction === "buy" ? state.money < total || state.stock[resource] + quantity > state.warehouseCapacity[resource] : state.stock[resource] < quantity) return state;
+  return addLedger({ ...state, money: state.money + (direction === "buy" ? -total : total), stock: { ...state.stock, [resource]: state.stock[resource] + (direction === "buy" ? quantity : -quantity) } }, `${quantity} ${resourceNames[resource]} ${direction === "buy" ? "satın alındı" : "satıldı"}.`);
+}
+export function equipFromStock(state: GameState, id: string, type: EquipmentType, quantity = 1): GameState {
+  const resource = equipmentResources[type];
+  if (!state.sites[id] || !siteDefinitions.find(s => s.id === id)?.equipment.includes(type) || !Number.isSafeInteger(quantity) || quantity < 1 || !resource || state.stock[resource] < quantity) return state;
+  return reconcileEquipmentNotices({ ...state,
+    stock: { ...state.stock, [resource]: state.stock[resource] - quantity },
+    equipmentSequence: state.equipmentSequence + quantity,
+    equipment: [...state.equipment, ...Array.from({ length: quantity }, (_, i) => ({ id: state.equipmentSequence + i + 1, siteId: id, type, level: 1, durability: type === "feed" ? 1 : 100 }))],
+  });
+}
 export const siteProducts = (site: SiteDefinition): Resource[] =>
   site.recipes.length ? site.recipes.map((r) => r.output) : [site.job];
 const PRICE_LABOR = 20;
@@ -1333,7 +1376,7 @@ export function ownedSite(
   );
 }
 export const sitePurchaseCost = (state: GameState): number =>
-  100 * 2 ** Object.keys(state.sites).length;
+  100 * 2 ** Math.min(4, Object.keys(state.sites).length) * (1 + Math.max(0, Object.keys(state.sites).length - 4) / 4);
 export const workerCapacity = (site: SiteState): number => site.level * 3;
 export const productionCapacity = (site: SiteState): number => site.level * 100;
 export const siteUpgradeCost = (site: SiteState): number =>
@@ -1498,7 +1541,7 @@ export const equippedCapacity = (
       (type) =>
         state.equipment.filter(
           (e) => e.siteId === site.id && e.type === type && e.durability > 0,
-        ).length,
+        ).length + (type === "feed" ? state.stock.feed : 0),
     ),
   );
 export function canAssign(state: GameState, job: Resource): boolean {
@@ -1720,6 +1763,12 @@ function produce(state: GameState): GameState {
       )
       .slice(0, workerCapacity(site));
     for (const worker of crew) {
+      if (definition.category === "livestock" && next.stock.feed > 0 &&
+          !next.equipment.some(e => e.siteId === definition.id && e.type === "feed" && e.durability > 0 && !used.has(e.id)) &&
+          definition.equipment.filter(t => t !== "feed").every(type => next.equipment.some(e => e.siteId === definition.id && e.type === type && e.durability > 0 && !used.has(e.id)))) {
+        next.stock.feed--;
+        next.equipment.push({ id: ++next.equipmentSequence, siteId: definition.id, type: "feed", level: 1, durability: 1 });
+      }
       if (productionStatus(next, definition) !== "Üretimde") break;
       const kit = definition.equipment.map((type) =>
         next.equipment.find(
@@ -1733,15 +1782,7 @@ function produce(state: GameState): GameState {
       if (kit.some((e) => !e)) break;
       kit.forEach((e) => used.add(e!.id));
       const speed = 20 + (Math.min(...kit.map((e) => e!.level)) - 1) * 5;
-      // Her hayvan (çalışan) çalışma saatinde bir yem tüketir. Saat başı
-      // kontrolü aynı gerçek saat içinde yalnızca bir kez yapılır.
-      if (
-        definition.category === "livestock" &&
-        next.minuteOfDay % 60 === 0
-      ) {
-        const feed = kit.find((e) => e!.type === "feed")!;
-        feed.durability = Math.max(0, feed.durability - 1);
-      }
+      // Each allocated ration supplies 60 working minutes; consume after work.
       if (definition.recipes.length) {
         for (const recipe of definition.recipes) {
           if (kit.some((e) => e!.durability <= 0)) break;
@@ -1765,9 +1806,13 @@ function produce(state: GameState): GameState {
               e!.durability = Math.max(0, e!.durability - 1 / e!.level);
             });
         }
+        const feed = kit.find(e => e!.type === "feed");
+        if (feed) feed.durability = Math.max(0, Math.round((feed.durability - 1 / 60) * 1e10) / 1e10);
         continue;
       }
       worker.progress += speed;
+      const feed = kit.find(e => e!.type === "feed");
+      if (feed) feed.durability = Math.max(0, Math.round((feed.durability - 1 / 60) * 1e10) / 1e10);
       if (worker.progress < 100) continue;
       next.stock[definition.job]++;
       if (definition.finite) site.extracted++;

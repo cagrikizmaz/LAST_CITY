@@ -10,7 +10,11 @@
     "android:sync": "npm run build && cap sync android",
     "android:apk": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-android.ps1",
     "lint": "eslint .",
-    "format": "prettier --write ."
+    "format": "prettier --write .",
+    "desktop:prepare": "npm run build && tsc -p tsconfig.desktop.json --noEmit && node scripts/build-desktop.mjs",
+    "desktop:exe": "npm run desktop:prepare && electron-builder --config electron-builder.json --win nsis --x64 --publish never",
+    "test:lan": "vitest run desktop/lanServer.test.ts desktop/discovery.test.ts src/commands.test.ts src/NetworkPanel.test.tsx",
+    "test:android-discovery": "node scripts/test-android-discovery.mjs"
   },
   "dependencies": {
     "@capacitor/android": "^8.5.2",
@@ -20,12 +24,19 @@
     "react": "latest",
     "react-dom": "latest",
     "typescript": "latest",
-    "vite": "latest"
+    "vite": "latest",
+    "ws": "^8.21.3"
   },
   "devDependencies": {
     "@capacitor/cli": "^8.5.2",
+    "@playwright/test": "^1.63.0",
+    "@types/node": "^26.6.2",
     "@types/react": "latest",
     "@types/react-dom": "latest",
+    "@types/ws": "^8.18.1",
+    "electron": "^44.4.3",
+    "electron-builder": "^26.15.3",
+    "esbuild": "^0.28.2",
     "eslint": "latest",
     "jsdom": "latest",
     "prettier": "latest",

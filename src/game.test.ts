@@ -1,5 +1,24 @@
 ﻿import { describe, expect, it } from "vitest";
 import * as g from "./game";
+it("keeps multiplayer production running overnight without advancing days or skipping time", () => {
+  const state: g.GameState = { ...ready(), timeMode: "continuous", minuteOfDay: 1439, day: 7 };
+  expect(g.isWorkingHours(state)).toBe(true);
+  const next = g.simulateTick(state);
+  expect(next.minuteOfDay).toBe(0);
+  expect(next.day).toBe(7);
+  expect(next.sites.lumber.productProgress?.wood).toBeGreaterThan(state.sites.lumber.productProgress?.wood ?? 0);
+  expect(next.money).toBeLessThan(state.money);
+  expect(g.skipToMorning(next)).toBe(next);
+  expect(g.isWorkingHours({ ...next, timeMode: undefined })).toBe(false);
+});
+it("uses player level for multiplayer orders regardless of legacy day count", () => {
+  const state: g.GameState = { ...ready(), timeMode: "continuous", level: 3 };
+  const first = g.refreshOrderPool({ ...state, day: 1 }, true);
+  const later = g.refreshOrderPool({ ...state, day: 99 }, true);
+  expect(first.orderPool.length).toBeGreaterThan(0);
+  expect(later.orderPool).toEqual(first.orderPool);
+  expect(first.orderPool.every((order) => order.dayLevel === 3)).toBe(true);
+});
 const resource = (name: string) =>
   g.resources.find((r) => g.resourceNames[r] === name)!;
 function ready(id = "lumber", crew = 1): g.GameState {
@@ -33,6 +52,7 @@ describe("categories and purchases", () => {
       "Tarım",
       "Hayvancılık",
       "Maden",
+      "Atölyeler",
       "Hastane",
     ]);
     expect(g.siteDefinitions.map((s) => s.name)).toEqual(
@@ -145,7 +165,7 @@ describe("equipment and workers", () => {
     const next = ticks(state);
     expect(next.stock.wood).toBe(1);
     expect(next.money).toBe(state.money);
-    expect(next.equipment.map((e) => e.durability)).toEqual([99, 99, 100]);
+    expect(next.equipment.map((e) => e.durability)).toEqual([98, 98, 100]);
     expect(state.equipment.every((e) => e.durability === 100)).toBe(true);
   });
   it("stops after a tool breaks, asks for replacements and resumes with a new tool", () => {
@@ -187,7 +207,7 @@ describe("equipment and workers", () => {
       state = g.upgradeEquipment(state, item.id);
     const next = ticks(state, 4);
     expect(next.stock.wood).toBe(1);
-    expect(next.equipment[0].durability).toBe(99.5);
+    expect(next.equipment[0].durability).toBe(99);
   });
   it("does not share one kit among multiple workers in the same tick", () => {
     let state = ready("lumber", 2);
@@ -453,10 +473,10 @@ describe("economy, clock and labor regression", () => {
       g.simulateTick({ ...state, minuteOfDay: 479 }).workers[0].progress,
     ).toBe(0);
     expect(
-      g.simulateTick({ ...state, minuteOfDay: 480 }).workers[0].progress,
+      g.simulateTick({ ...state, minuteOfDay: 480 }).sites.lumber.productProgress?.wood,
     ).toBe(20);
     expect(
-      g.simulateTick({ ...state, minuteOfDay: 1199 }).workers[0].progress,
+      g.simulateTick({ ...state, minuteOfDay: 1199 }).sites.lumber.productProgress?.wood,
     ).toBe(20);
     expect(
       g.simulateTick({ ...state, minuteOfDay: 1200 }).workers[0].progress,
@@ -472,7 +492,7 @@ describe("economy, clock and labor regression", () => {
     const morning = g.skipToMorning({ ...state, minuteOfDay: 1200 });
     expect(morning.money).toBe(next.money);
     expect(morning.minuteOfDay).toBe(480);
-    expect(g.skipToMorning(morning)).toBe(morning);
+    expect(g.skipToMorning(morning).day).toBe(morning.day + 1);
     expect(g.skipToMorning({ ...next, minuteOfDay: 1 }).money).toBe(next.money);
   });
   it("charges for hires, respects housing and allows shelter expansion", () => {
