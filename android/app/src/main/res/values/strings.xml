@@ -1,7 +1,7 @@
 <?xml version='1.0' encoding='utf-8'?>
 <resources>
-    <string name="app_name">KÜLDEN</string>
-    <string name="title_activity_main">KÜLDEN</string>
+    <string name="app_name">Farming</string>
+    <string name="title_activity_main">Farming</string>
     <string name="package_name">com.kulden.game</string>
     <string name="custom_url_scheme">com.kulden.game</string>
 </resources>

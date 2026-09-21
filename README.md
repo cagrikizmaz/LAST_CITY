@@ -1,4 +1,4 @@
-﻿# KÜLDEN
+﻿# Farming
 
 Kaynak üretimi, işçi yönetimi ve ticaret oyunu.
 
@@ -61,3 +61,9 @@ Oyun `last-city-workers-v2` anahtarıyla tarayıcıya kaydedilir; çevrimdışı
 `npm test` oyun kuralları ve DOM üzerinden kullanıcı akışlarını, `npm run build` TypeScript ve üretim derlemesini doğrular. ESLint yapılandırması henüz bulunmaz.
 
 Hastane ana kategoridedir. İlk seviye 2 doktor kapasitesi verir; her seviye +2 kapasite ekler. Doktor 50₺ karşılığında alınır ve 2 hastaya bakar. Hastalık 600 saniye, kesintisiz tedavi 300 saniye sürer. Her tedavi 1 iğne, 1 ağrı kesici ve 1 antibiyotik tüketir; eksikleri hastane müdürü bildirir. Hastalık başına ölüm olasılığı %1’dir. Ekipmansız geçirilen 600 mesai saniyesi istifaya yol açar; ekipman sağlanınca sayaç sıfırlanır. Dinlenme ve hastalık süreleri istifa sayacını ilerletmez. Sabaha geçmek gerçek süre sayaçlarını ilerletmez.
+
+## Android APK
+
+`APK-Olustur.bat` dosyasına çift tıklayın. Güncel oyun derlenir ve APK konumu açılır: `artifacts/Farming.apk` (debug). Terminal: `npm run android:apk`.
+
+JDK 21 ve Android SDK gereklidir; mevcut yerel araçlar otomatik bulunur. Gradle önbelleği ve artımlı derleme kullanılır, temiz derleme yapılmaz. Web içeriği her çalıştırmada güncellenir. Hata olursa pencere açık kalır.

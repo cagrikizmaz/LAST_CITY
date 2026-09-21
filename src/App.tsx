@@ -70,9 +70,9 @@ export function App() {
             window.scrollTo({ top: 0, behavior: "instant" });
           }}
         >
-          <span className="brand-mark">K</span>
+          <span className="brand-mark">F</span>
           <span>
-            <b>YENİ ŞAFAK</b>
+            <b>Farming</b>
             <small>Her emek, yeni bir şehir.</small>
           </span>
         </button>

@@ -19,13 +19,13 @@ $env:DEBUG = ''
 if ($LASTEXITCODE -ne 0) { throw 'Web derlemesi veya Capacitor senkronizasyonu basarisiz.' }
 Push-Location (Join-Path $projectRoot 'android')
 try {
-    & .\gradlew.bat --no-daemon '-Pandroid.overridePathCheck=true' assembleDebug
+    & .\gradlew.bat --build-cache '-Pandroid.overridePathCheck=true' assembleDebug
     if ($LASTEXITCODE -ne 0) { throw 'Android APK derlemesi basarisiz.' }
 } finally {
     Pop-Location
 }
 $outputDir = Join-Path $projectRoot 'artifacts'
 New-Item -ItemType Directory -Force $outputDir | Out-Null
-$apk = Join-Path $outputDir 'kulden-android-debug.apk'
+$apk = Join-Path $outputDir 'Farming.apk'
 Copy-Item -LiteralPath (Join-Path $projectRoot 'android\app\build\outputs\apk\debug\app-debug.apk') -Destination $apk -Force
 Write-Output "APK: $apk"
