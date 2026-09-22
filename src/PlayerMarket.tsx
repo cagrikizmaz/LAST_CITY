@@ -1,3 +1,4 @@
+import { ProductIcon } from "./ProductIcon";
 import { useState } from "react";
 import * as g from "./game";
 import type { useGameSession } from "./useGameSession";
@@ -52,7 +53,7 @@ export function PlayerMarket({ session, openMultiplayer }: { session: ReturnType
           const own = offer.sellerId === session.snapshot!.playerId;
           const room = session.state.warehouseCapacity[offer.resource] - session.state.stock[offer.resource];
           return <article key={offer.id} className="player-offer">
-            <small>{offer.sellerName}</small><strong>{offer.quantity} {g.resourceNames[offer.resource]}</strong>
+            <small>{offer.sellerName}</small><strong className="product-name"><ProductIcon resource={offer.resource} />{offer.quantity} {g.resourceNames[offer.resource]}</strong>
             <span>{offer.total.toLocaleString("tr-TR")}₺ toplam</span>
             <button disabled={!own && (session.state.money < offer.total || room < offer.quantity)} onClick={() => {
               session.setError(""); session.send({ type: own ? "cancelOffer" : "buy", id: offer.id });

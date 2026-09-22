@@ -1,3 +1,4 @@
+import { ProductIcon } from "./ProductIcon";
 import type { Dispatch } from "./commands";
 import { useEffect, useRef, useState } from "react";
 import * as g from "./game";
@@ -75,7 +76,7 @@ export function CategorySummary({
             key={r}
             className={!g.ownedSite(state, r) ? "unowned-stock" : ""}
           >
-            <span>{g.resourceNames[r]}</span>
+            <span className="product-name"><ProductIcon resource={r} size={20} />{g.resourceNames[r]}</span>
             <b>{state.stock[r]}</b>
           </span>
         ))}
@@ -114,6 +115,7 @@ export function EquipmentPurchase({
   const total = quantity * equipment.price;
   return (
     <div className="equipment-purchase">
+      <small>Çalışan işçilerin eksik ekipmanları stoktan otomatik tamamlanır.</small>
       <button disabled={state.stock[g.equipmentResources[type]] < quantity}
         onClick={() => act({ type: "equipFromStock", args: [siteId, type, quantity] })}>
         Stoktan kullan · {quantity} adet (Stok: {state.stock[g.equipmentResources[type]]})
@@ -220,7 +222,7 @@ export function ProductControls({
           >
             <div className="product-heading">
               <div>
-                <h3>{label}</h3>
+                <h3 className="product-name"><ProductIcon resource={recipe.output} size={28} />{label}</h3>
                 <span className="product-stock">
                   Stok: {state.stock[recipe.output]} /{" "}
                   {state.warehouseCapacity[recipe.output]}
@@ -315,6 +317,32 @@ export function ProductControls({
     </section>
   );
 }
+function MaterialProduction({ state, act, resource, missing }: Props & {
+  resource: g.Resource;
+  missing: number;
+}) {
+  const plan = g.planProductionChain(state, resource, missing);
+  const quantity = Math.min(missing, state.warehouseCapacity[resource] - state.stock[resource]);
+  const price = Math.round(g.marketPrice(state, resource) * quantity * 1.2 * 100) / 100;
+  return <div>
+    {missing > 0 && <button disabled={quantity <= 0 || state.money < price}
+      onClick={() => act({ type: "tradeResource", args: [resource, quantity, "buy"] })}>
+      {g.resourceNames[resource]} satın al · {quantity} adet · {price.toLocaleString("tr-TR")}₺
+    </button>}
+    {plan.steps.length > 0 && <small>
+      Kuyruğa eklenecek: {plan.steps.map(step =>
+        `${step.quantity} ${g.resourceNames[step.resource]} (${step.site})`).join(" + ")}
+    </small>}
+    {plan.waiting.map(message => <small key={message}>{message}</small>)}
+    <button disabled={!plan.steps.length}
+      aria-label={`${g.resourceNames[resource]} üretim emri ver`}
+      onClick={() => act({ type: "queueProductionChain", args: [resource, missing] })}>
+      Üretim emri ver · Ara ürünleri de kuyruğa al
+    </button>
+    {!plan.steps.length && !plan.waiting.length && <small>Stok ve mevcut üretim emirleri ihtiyacı karşılıyor.</small>}
+  </div>;
+}
+
 export function AssistantDock({
   state,
   act,
@@ -369,7 +397,7 @@ export function AssistantDock({
               Merhaba! {category.name.toLocaleLowerCase("tr-TR")} sahalarını
               takip ediyorum.{" "}
               {requests.length || shortages.length
-                ? "Ekibimizin ihtiyaçlarını aşağıda topladım."
+                ? "Eksik malzemeleri satın alabilir veya açık saha ve atölyelerimizde ara ürünleriyle birlikte üretim kuyruğuna alabiliriz."
                 : "Şu an bekleyen malzeme ihtiyacımız yok."}
             </p>
           )}
@@ -380,19 +408,26 @@ export function AssistantDock({
                 {g.equipmentTypes[r.type].name.toLocaleLowerCase("tr-TR")}{" "}
                 gerekli.
               </span>
-              <button
-                disabled={state.money < g.equipmentTypes[r.type].price}
-                onClick={() => act({ type: "buyEquipment", args: [r.site.id, r.type] })}
-              >
-                1 adet al · {g.equipmentTypes[r.type].price}₺
+              <button disabled={state.stock[g.equipmentResources[r.type]] < 1}
+                onClick={() => act({ type: "equipFromStock", args: [r.site.id, r.type, 1] })}>
+                Stoktan kullan · {g.equipmentTypes[r.type].name}
               </button>
+              <button disabled={state.money < g.equipmentTypes[r.type].price * r.count}
+                onClick={() => act({ type: "buyEquipment", args: [r.site.id, r.type, r.count] })}>
+                Satın al ve kullan · {r.count} {g.equipmentTypes[r.type].name} · {(g.equipmentTypes[r.type].price * r.count).toLocaleString("tr-TR")}₺
+              </button>
+              <MaterialProduction state={state} act={act} resource={g.equipmentResources[r.type]}
+                missing={Math.max(0, requests.filter((request) => request.type === r.type)
+                  .reduce((sum, request) => sum + request.count, 0) - state.stock[g.equipmentResources[r.type]])} />
             </div>
           ))}
           {shortages.map((n) => (
-            <p className="shortage-text" key={n.resource}>
-              {g.resourceNames[n.resource]} yetersiz, {n.missing} tane daha
-              gerekiyor.
-            </p>
+            <div className="manager-request" key={n.resource}>
+              <span className="shortage-text">
+                {g.resourceNames[n.resource]} yetersiz, {n.missing} tane daha gerekiyor.
+              </span>
+              <MaterialProduction state={state} act={act} resource={n.resource} missing={n.missing} />
+            </div>
           ))}
           {g.siteDefinitions
             .filter((s) => s.category === selected && state.sites[s.id])

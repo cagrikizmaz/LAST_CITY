@@ -44,6 +44,34 @@ const render = async (state?: g.GameState) => {
     localStorage.setItem("last-city-workers-v2", JSON.stringify(state));
   await act(async () => root.render(<App />));
 };
+it("lets managers produce missing ingredients while offering purchasing too", async () => {
+  let state = g.purchaseSite({ ...g.emptyState(), money: 100000 }, "smith");
+  state = g.purchaseSite(state, "furnace");
+  const axe = g.equipmentResources.axe;
+  const iron = g.resources.find(r => g.resourceNames[r] === "Hamdemir")!;
+  state = g.setProduction(state, "smith", axe, 3);
+  await render(state);
+  const launcher = container.querySelector<HTMLButtonElement>('button[aria-label^="Atölyeler asistanı"]')!;
+  await act(async () => launcher.click());
+  expect(container.querySelector('[role="dialog"]')!.textContent).toContain("3 Hamdemir (Fırın)");
+  await clickLabel("Hamdemir üretim emri ver");
+  expect(g.productionRemaining(saved().sites.furnace, iron)).toBe(3);
+  expect(container.querySelector<HTMLButtonElement>('button[aria-label="Hamdemir üretim emri ver"]')!.disabled).toBe(true);
+  expect(container.querySelector<HTMLButtonElement>('button[aria-label="Kereste üretim emri ver"]')!.disabled).toBe(true);
+  expect(container.querySelector('[role="dialog"]')!.textContent).toContain("satın al");
+  expect(saved().stock[iron]).toBe(0);
+  expect(saved().money).toBe(state.money);
+});
+it("lets managers request equipment from an open workshop", async () => {
+  let state = g.purchaseSite({ ...g.emptyState(), money: 100000 }, "lumber");
+  state = g.purchaseSite(state, "smith");
+  await render(state);
+  await act(async () => container.querySelector<HTMLButtonElement>('button[aria-label^="Orman asistanı"]')!.click());
+  await clickLabel("Balta üretim emri ver");
+  expect(g.productionRemaining(saved().sites.smith, g.equipmentResources.axe)).toBe(1);
+  expect(container.querySelector('[role="dialog"]')!.textContent).toContain("Satın al ve kullan");
+  expect(saved().money).toBe(state.money);
+});
 it("edits a production target while ticks continue and clamps to capacity", async () => {
   await render(g.purchaseSite({ ...g.emptyState(), money: 1000 }, "barn"));
   await click("Hayvancılık");
@@ -433,4 +461,26 @@ it("lets the player inspect and accept merchant offers", async () => {
   );
   await click("Üretim");
   expect(container.querySelector(".orders-screen")).toBeNull();
+});
+
+it("expires recovery notices after eight seconds even while paused", async () => {
+  const state = g.emptyState();
+  state.paused = true;
+  state.laborNotices = [
+    { id: 1, text: "1 i\u015f\u00e7i iyile\u015fti, yeniden \u00e7al\u0131\u015fabilir." },
+    { id: 2, text: "Ekipman gerekli" },
+  ];
+  await render(state);
+  await act(async () => vi.advanceTimersByTime(7999));
+  expect(saved().laborNotices).toHaveLength(2);
+  await act(async () => vi.advanceTimersByTime(1));
+  expect(saved().laborNotices.map(n => n.id)).toEqual([2]);
+});
+it("lets a manager purchase and equip missing equipment", async () => {
+  const state = g.purchaseSite({ ...g.emptyState(), money: 100000 }, "lumber");
+  await render(state);
+  await act(async () => container.querySelector<HTMLButtonElement>('button[aria-label^="Orman asistan\u0131"]')!.click());
+  await click("Sat\u0131n al ve kullan");
+  expect(saved().equipment.some(e => e.siteId === "lumber" && e.type === "axe")).toBe(true);
+  expect(saved().money).toBe(state.money - g.equipmentTypes.axe.price);
 });

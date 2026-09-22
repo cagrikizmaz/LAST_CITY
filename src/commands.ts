@@ -19,6 +19,7 @@ const handlers = {
   buyMedicalSupply: g.buyMedicalSupply,
   adjustProduction: g.adjustProduction,
   setProduction: g.setProduction,
+  queueProductionChain: g.queueProductionChain,
   fulfillOrder: g.fulfillOrder,
   abandonOrder: g.abandonOrder,
   buyEquipment: (state: g.GameState, site: string, type: g.EquipmentType, quantity = 1) => {
@@ -58,6 +59,7 @@ export function applyCommand(state: g.GameState, value: unknown): g.GameState {
     case "buyMedicalSupply": valid = args.length === 1 && g.supplyTypes.includes(args[0] as g.MedicalSupply); break;
     case "adjustProduction": valid = args.length === 3 && site(args[0]) && resource(args[1]) && (args[2] === -1 || args[2] === 1); break;
     case "setProduction": valid = args.length === 3 && site(args[0]) && resource(args[1]) && int(args[2]); break;
+    case "queueProductionChain": valid = args.length === 2 && resource(args[0]) && int(args[1]); break;
     case "tradeResource": valid = args.length === 3 && resource(args[0]) && int(args[1], 1) && (args[2] === "buy" || args[2] === "sell"); break;
     case "equipFromStock":
     case "buyEquipment": valid = (args.length === 3 || args.length === 2) && site(args[0]) && typeof args[1] === "string" && Object.prototype.hasOwnProperty.call(g.equipmentTypes, args[1]) && (args.length === 2 || int(args[2], 1, 1000)); break;

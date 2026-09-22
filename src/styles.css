@@ -1811,6 +1811,17 @@ h3 {
   margin-top: 10px;
   font-size: 11px;
 }
+.assistant-popup .manager-request {
+  flex-wrap: wrap;
+}
+.assistant-popup .manager-request > span,
+.assistant-popup .manager-request > div {
+  flex-basis: 100%;
+}
+.assistant-popup .manager-request > div small {
+  display: block;
+  margin-bottom: 6px;
+}
 .assistant-popup .manager-request button {
   font-size: 11px;
   flex-shrink: 0;
@@ -2251,3 +2262,21 @@ h3 {
 .network-heading { align-items: center; }
 .hosting-note { padding: 14px; border: 1px solid #786749; border-radius: 8px; color: #edc088; line-height: 1.6; }
 .game-content[hidden], .network-panel[hidden] { display: none; }
+
+/* Shared, platform-independent product thumbnails. */
+.product-icon {
+  display: inline-block;
+  flex: 0 0 auto;
+  object-fit: contain;
+  vertical-align: middle;
+  background: transparent;
+}
+.product-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.resource-strip button > .product-icon {
+  grid-row: span 2;
+  align-self: center;
+}

@@ -1,3 +1,4 @@
+import { ProductIcon } from "./ProductIcon";
 import type { useGameSession } from "./useGameSession";
 import type { Dispatch } from "./commands";
 import { useState } from "react";
@@ -31,7 +32,7 @@ export function OrderBoard({
             const enough = state.stock[order.resource] >= order.quantity;
             return <article key={order.id} className="player-offer">
               <small>{order.buyerName}{own ? " · Senin siparişin" : ""}</small>
-              <strong>{order.quantity} {g.resourceNames[order.resource]}</strong>
+              <strong className="product-name"><ProductIcon resource={order.resource} size={20} />{order.quantity} {g.resourceNames[order.resource]}</strong>
               <span>{money(order.total)} toplam ödeme</span>
               <button disabled={!own && !enough} onClick={() => {
                 session.setError("");
@@ -65,7 +66,7 @@ export function OrderBoard({
               .filter((r) => state.order!.needs[r] > 0)
               .map((r) => (
                 <div key={r}>
-                  <span>{g.resourceNames[r]}</span>
+                  <span className="product-name"><ProductIcon resource={r} size={20} />{g.resourceNames[r]}</span>
                   <b>
                     {state.stock[r]} / {state.order!.needs[r]}
                   </b>
@@ -94,8 +95,7 @@ export function OrderBoard({
         <p>Henüz kabul edilmiş sipariş yok.</p>
       )}
       <p className="board-day">
-        {state.timeMode === "continuous" ? "24 saat üretim" : `${state.day}. gün`} · {state.orderPool.length} bekleyen teklif · Yeni pano:
-        her saat
+        {state.timeMode === "continuous" ? "24 saat üretim" : `${state.day}. gün`} · {state.orderPool.length} bekleyen teklif · Her teklif {g.ORDER_BOARD_LIFETIME} sn panoda kalır
       </p>
       {!Object.keys(state.sites).length && (
         <p>İlk sahanı kurduğunda anonim siparişler gelmeye başlar.</p>
@@ -137,7 +137,7 @@ export function OrderBoard({
                 {offer.challenge ? " · Yatırım siparişi" : ""}
               </b>
               <small>
-                Sipariş
+                Teklifin kapanmasına {offer.remaining} sn
               </small>
               <strong>{money(offer.reward)}</strong>
               <div className="offer-value-summary">
@@ -165,7 +165,7 @@ export function OrderBoard({
                     .map((r) => (
                       <div key={r}>
                         <span>
-                          {g.resourceNames[r]}
+                          <span className="product-name"><ProductIcon resource={r} size={20} />{g.resourceNames[r]}</span>
                           <small>
                             Eksik stok:{" "}
                             {Math.max(0, offer.needs[r] - state.stock[r])}

@@ -39,6 +39,24 @@ export function useGameSession() {
     if (modeRef.current) send({ type: "command", command });
     else setLocal((state) => applyCommand(state, command));
   }, [send]);
+  const recoveryTimers = useRef(new Map<number, ReturnType<typeof setTimeout>>());
+  const notices = (snapshot?.state ?? local).laborNotices;
+  useEffect(() => {
+    const timers = recoveryTimers.current;
+    const recoveryIds = new Set(notices.filter(n => n.text.includes("iyileşti")).map(n => n.id));
+    for (const [id, timer] of timers) {
+      if (!recoveryIds.has(id)) { clearTimeout(timer); timers.delete(id); }
+    }
+    for (const id of recoveryIds) {
+      if (!timers.has(id)) timers.set(id, setTimeout(() => {
+        act({ type: "dismissNotice", args: [id] });
+      }, 8000));
+    }
+  }, [notices, act]);
+  useEffect(() => {
+    const timers = recoveryTimers.current;
+    return () => { for (const timer of timers.values()) clearTimeout(timer); timers.clear(); };
+  }, []);
   const disconnect = useCallback(() => {
     modeRef.current = false;
     if (timerRef.current) clearTimeout(timerRef.current);

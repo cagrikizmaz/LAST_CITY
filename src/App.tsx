@@ -1,3 +1,4 @@
+import { ProductIcon } from "./ProductIcon";
 import { useState } from "react";
 import { useGameSession } from "./useGameSession";
 import { ResourceMarket } from "./ResourceMarket";
@@ -141,11 +142,7 @@ export function App() {
                     if (s) openSite(s);
                   }}
                 >
-                  <span>
-                    {g.siteDefinitions.find((s) =>
-                      g.siteProducts(s).includes(r),
-                    )?.icon ?? "📦"}
-                  </span>
+                  <ProductIcon resource={r} />
                   <small>{g.resourceNames[r]}</small>
                   <b>
                     {state.stock[r]}/{state.warehouseCapacity[r]}
@@ -205,7 +202,7 @@ export function App() {
             <h1>Fiyatlandırma tablosu</h1>
             <p>
               Piyasa fiyatları her oyun saatinde yaklaşık %10 değişir. Reçeteli
-              ürünlerde fiyat, malzeme maliyeti + {money(20)} işçilik olarak hesaplanır.
+              ürünlerde fiyat, malzeme maliyetine %15 işçilik payı ve üretim türüne göre 2–8 ₺ işlem bedeli eklenerek hesaplanır.
             </p>
             {g.categories.map((category) => {
               const categoryResources = g.resources.filter((resource) => {
@@ -432,8 +429,8 @@ export function App() {
                       : `Sahayı yükselt · ${money(g.siteUpgradeCost(site))}`}
                   </button>
                   <p>
-                    Her seviye +3 işçi sağlar. Sınırlı sahalarda rezerv, işlenen
-                    ürünlerde toplam üretim hedefi kapasitesi +100 artar.
+                    Her seviye +3 işçi sağlar. İşlenen ürünlerde toplam üretim
+                    hedefi kapasitesi +100 artar. Madenler rezerv sınırı olmadan üretir.
                   </p>
                   <div className="staff-controls">
                     <button

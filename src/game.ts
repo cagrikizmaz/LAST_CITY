@@ -302,7 +302,7 @@ export function changeWorkers(
 }
 
 const initialState = (): GameState => ({
-  version: 16,
+  version: 17,
   hospital: {
     level: 0,
     doctors: 0,
@@ -318,8 +318,8 @@ const initialState = (): GameState => ({
   warehouseCapacity: Object.fromEntries(
     resources.map((resource) => [resource, 100]),
   ) as Record<Resource, number>,
-  basePrices: Object.fromEntries(resources.map((resource) => [resource, 10])) as Record<Resource, number>,
-  marketPrices: Object.fromEntries(resources.map((resource) => [resource, 10])) as Record<Resource, number>,
+  basePrices: defaultPrices(),
+  marketPrices: defaultPrices(),
   laborEventIn: 240 + Math.floor(Math.random() * 241),
   laborSequence: 0,
   laborNotices: [],
@@ -793,7 +793,8 @@ export function acceptOrder(state: GameState, id: number): GameState {
 export function refreshOrderPool(state: GameState, hourly = false): GameState {
   if (!Object.keys(state.sites).length)
     return state;
-  const pool = (hourly ? [] : state.orderPool)
+  // Hourly arrivals must not remove offers before their own lifetime expires.
+  const pool = state.orderPool
     .map((offer) => ({ ...offer, remaining: offer.remaining - 1 }))
     .filter((offer) => offer.remaining > 0);
   if (!hourly && state.orderIn > 1)
@@ -1043,7 +1044,7 @@ export function loadGame(raw: string | null): GameState {
         stock,
         order: saved.version >= 14 ? order : null,
         offerDay:
-          saved.version < 16
+          saved.version < 17
             ? 0
             : Number.isSafeInteger(saved.offerDay)
               ? saved.offerDay
@@ -1051,14 +1052,12 @@ export function loadGame(raw: string | null): GameState {
                 ? saved.day
                 : 0,
         orderPool:
-          saved.version >= 14
+          saved.version >= 17
             ? (saved.orderPool ?? []).map((o: Order) => ({
                 ...o,
                 needs: { ...zeroStock(), ...o.needs },
               }))
-            : order
-              ? [order]
-              : [],
+            : [],
         merchantCredit: merchants.map((_, i) =>
           Number.isFinite(saved.merchantCredit?.[i])
             ? Math.max(0, Math.min(100, saved.merchantCredit[i]))
@@ -1070,7 +1069,7 @@ export function loadGame(raw: string | null): GameState {
         basePrices: Object.fromEntries(
           resources.map((resource) => [
             resource,
-            Number.isFinite(saved.basePrices?.[resource]) && saved.basePrices[resource] >= 0
+            saved.version >= 17 && Number.isFinite(saved.basePrices?.[resource]) && saved.basePrices[resource] > 0
               ? saved.basePrices[resource]
               : defaults.basePrices[resource],
           ]),
@@ -1078,14 +1077,14 @@ export function loadGame(raw: string | null): GameState {
         marketPrices: Object.fromEntries(
           resources.map((resource) => [
             resource,
-            Number.isFinite(saved.marketPrices?.[resource]) && saved.marketPrices[resource] >= 0
+            saved.version >= 17 && Number.isFinite(saved.marketPrices?.[resource]) && saved.marketPrices[resource] > 0
               ? saved.marketPrices[resource]
               : defaults.marketPrices[resource],
           ]),
         ) as Record<Resource, number>,
         shelterCapacity,
         lastOrder: saved.lastOrder ? { penalty: 0, ...saved.lastOrder } : null,
-        version: 16,
+        version: 17,
         day: Number.isSafeInteger(saved.day) && saved.day >= 1 ? saved.day : 1,
         minuteOfDay:
           Number.isInteger(saved.minuteOfDay) &&
@@ -1294,7 +1293,7 @@ export const siteDefinitions: SiteDefinition[] = [
       category: "mine",
       job: product(name),
       icon: "⛏️",
-      finite: name !== "Kömür",
+      finite: false,
       equipment: miningEquipment,
       recipes: [],
     }),
@@ -1340,19 +1339,60 @@ export function equipFromStock(state: GameState, id: string, type: EquipmentType
 }
 export const siteProducts = (site: SiteDefinition): Resource[] =>
   site.recipes.length ? site.recipes.map((r) => r.output) : [site.job];
-const PRICE_LABOR = 20;
+// Relative in-game values per unit, not real-world currency quotations.
+const rawMaterialPrices: Record<string, number> = {
+  "Çubuk": 2, "Kum": 3, "Kil": 4, "Taş": 5,
+  "Buğday": 4, "Yumurta": 3, "Meyve": 6, "Odun": 8,
+  "Süt": 7, "Koyun sütü": 9, "Yün": 12, "Et": 18, "Deri": 15,
+  "Kömür": 12, "Demir": 24, "Bakır": 36, "Gümüş": 120, "Altın": 360,
+  // Catalog goods without an active production recipe also have explicit values.
+  "Pamuk": 10, "Çelik": 90, "Tahta": 25, "Kâğıt": 18, "Kömür Briketi": 20,
+  "Tuz": 4, "Şeker": 9, "Bal": 22, "Patates": 4, "Havuç": 5, "Domates": 6,
+  "Mısır": 5, "Pirinç": 7, "Zeytin": 10, "Zeytinyağı": 35, "Üzüm": 8,
+  "Meyve Suyu": 18, "Reçel": 26, "Yoğurt": 12, "Balık": 16,
+  "Konserve": 38, "Kurutulmuş Gıda": 30, "Sabun": 18, "Mum": 12,
+  "Seramik": 22, "Kiremit": 16, "Çimento": 28, "Beton": 45,
+  "Boru": 110, "Tel": 48, "Kablo": 75, "Vida": 85, "Dişli": 140,
+  "Alet Takımı": 320, "Masa": 150, "Sandalye": 90, "Dolap": 240,
+  "Yatak": 280, "Kask": 110, "İlaç": 85, "Bandaj": 25,
+  "Gübre": 8, "Tohum": 3, "Fidan": 15, "Kauçuk": 28, "Plastik": 32,
+  "Petrol": 30, "Benzin": 48, "Pil": 65, "Akü": 190, "Ampul": 55,
+  "Devre": 240, "Sensör": 320, "Motor": 550, "Pompa": 650,
+  "Jeneratör": 1400, "Güneş Paneli": 1800, "Türbin": 2400,
+  "Filtre": 90, "Arıtılmış Su": 6, "Radyo": 450, "Bilgisayar": 1600,
+  "Robot Kol": 3200, "Drone": 4200, "Uydu Parçası": 6500,
+  "Enerji Hücresi": 8000, "Şehir Çekirdeği": 15000,
+};
+const processingFees: Record<string, number> = {
+  barn: 3, sheep: 3, mill: 2, weaver: 4, furnace: 6,
+  carpenter: 6, smith: 8, tailor: 5, bakery: 3,
+};
+const roundPrice = (value: number): number => Math.round(value * 100) / 100;
+function catalogPrice(resource: Resource): number {
+  const site = siteDefinitions.find(s => s.recipes.some(r => r.output === resource && Object.keys(r.inputs).length));
+  const recipe = site?.recipes.find(r => r.output === resource);
+  if (!site || !recipe) {
+    const price = rawMaterialPrices[resourceNames[resource]];
+    if (!price) throw new Error(`Missing resource price: ${resourceNames[resource]}`);
+    return price;
+  }
+  const materials = Object.entries(recipe.inputs).reduce((sum, [input, amount]) => sum + catalogPrice(input as Resource) * amount!, 0);
+  return roundPrice(materials * 1.15 + (processingFees[site.id] ?? 4));
+}
+function defaultPrices(): Record<Resource, number> {
+  return Object.fromEntries(resources.map(r => [r, catalogPrice(r)])) as Record<Resource, number>;
+}
 export function marketPrice(state: GameState, resource: Resource, seen = new Set<Resource>()): number {
-  if (seen.has(resource)) return state.marketPrices[resource] ?? state.basePrices[resource] ?? 10;
-  const recipe = siteDefinitions.flatMap((site) => site.recipes).find(
-    (candidate) => candidate.output === resource && Object.keys(candidate.inputs).length > 0,
-  );
-  if (!recipe) return state.marketPrices[resource] ?? state.basePrices[resource] ?? 10;
+  if (seen.has(resource)) return state.marketPrices[resource] ?? state.basePrices[resource] ?? catalogPrice(resource);
+  const site = siteDefinitions.find(s => s.recipes.some(r => r.output === resource && Object.keys(r.inputs).length > 0));
+  const recipe = site?.recipes.find(r => r.output === resource);
+  if (!site || !recipe) return state.marketPrices[resource] ?? state.basePrices[resource] ?? catalogPrice(resource);
   const nextSeen = new Set(seen).add(resource);
   const materialCost = Object.entries(recipe.inputs).reduce(
     (sum, [input, amount]) => sum + marketPrice(state, input as Resource, nextSeen) * (amount ?? 0),
     0,
   );
-  return materialCost + PRICE_LABOR;
+  return roundPrice(materialCost * 1.15 + (processingFees[site.id] ?? 4));
 }
 export function orderMarketValue(state: GameState, order: Order): number {
   return resources.reduce((sum, resource) => sum + order.needs[resource] * marketPrice(state, resource), 0);
@@ -1363,9 +1403,11 @@ export function updateMarketPrices(state: GameState): GameState {
   for (const resource of resources) {
     seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
     const change = 0.9 + (seed / 4294967296) * 0.2;
-    marketPrices[resource] = Math.round((state.basePrices[resource] ?? 10) * change * 100) / 100;
+    marketPrices[resource] = roundPrice((state.basePrices[resource] ?? catalogPrice(resource)) * change);
   }
-  return { ...state, seed, marketPrices };
+  const next = { ...state, seed, marketPrices };
+  for (const resource of resources) marketPrices[resource] = marketPrice(next, resource);
+  return next;
 }
 export function ownedSite(
   state: GameState,
@@ -1410,7 +1452,7 @@ export function upgradeSite(state: GameState, id: string): GameState {
         [id]: { ...site, level: site.level + 1, extracted: 0 },
       },
     },
-    "Saha geliştirildi; üretim rezervi yenilendi.",
+    "Saha geliştirildi; işçi ve üretim hedefi kapasitesi artırıldı.",
   );
 }
 export function buyEquipment(
@@ -1662,6 +1704,57 @@ export function requestProduction(
 ): GameState {
   return quantity > 0 ? adjustProduction(state, id, output, quantity) : state;
 }
+
+// Account for all queued consumers so shared ingredients are not counted twice.
+export function planProductionChain(state: GameState, resource: Resource, missing: number) {
+  let next = state;
+  const steps: { resource: Resource; quantity: number; site: string }[] = [];
+  const waiting = new Set<string>();
+  const demand = zeroStock();
+  for (const definition of siteDefinitions) {
+    const site = state.sites[definition.id];
+    if (!site) continue;
+    for (const recipe of definition.recipes)
+      for (const [input, amount] of Object.entries(recipe.inputs))
+        demand[input as Resource] += amount! * productionRemaining(site, recipe.output);
+  }
+  const pending = (r: Resource) => Object.values(next.sites)
+    .reduce((sum, site) => sum + productionRemaining(site, r), 0);
+  const visit = (r: Resource, requested: number, ancestors: Set<Resource>) => {
+    if (ancestors.has(r)) { waiting.add(`${resourceNames[r]}: döngüsel reçete`); return; }
+    const required = Math.max(requested, demand[r] - next.stock[r], 0);
+    const quantity = Math.max(0, required - pending(r));
+    const producer = siteDefinitions.find(s => next.sites[s.id] &&
+      (s.recipes.some(recipe => recipe.output === r) || (!s.recipes.length && s.job === r)));
+    if (!producer) {
+      if (quantity) waiting.add(`${resourceNames[r]}: açık üretim sahası yok; satın alabilirsin`);
+      return;
+    }
+    const recipe = producer.recipes.find(recipe => recipe.output === r);
+    if (!recipe || isAutomatic(recipe)) {
+      if (quantity) waiting.add(`${resourceNames[r]}: ${producer.name} sürekli üretiminden bekleniyor (${quantity} adet)`);
+      return;
+    }
+    if (quantity) {
+      const site = next.sites[producer.id];
+      const room = productionCapacity(site) - site.queue.reduce((sum, q) => sum + q.remaining, 0);
+      const added = Math.min(quantity, room);
+      if (added > 0) {
+        next = adjustProduction(next, producer.id, r, added);
+        steps.push({ resource: r, quantity: added, site: producer.name });
+        for (const [input, amount] of Object.entries(recipe.inputs)) demand[input as Resource] += amount! * added;
+      }
+      if (added < quantity) waiting.add(`${resourceNames[r]}: kuyruk kapasitesi yetersiz (${quantity - added} adet)`);
+    }
+    const chain = new Set(ancestors).add(r);
+    for (const input of Object.keys(recipe.inputs)) visit(input as Resource, 0, chain);
+  };
+  if (Number.isSafeInteger(missing) && missing >= 0 && resources.includes(resource)) visit(resource, missing, new Set());
+  return { state: next, steps, waiting: [...waiting] };
+}
+export function queueProductionChain(state: GameState, resource: Resource, missing: number): GameState {
+  return planProductionChain(state, resource, missing).state;
+}
 export function cancelProduction(
   state: GameState,
   id: string,
@@ -1762,6 +1855,19 @@ function produce(state: GameState): GameState {
           isHoused(next, w.id),
       )
       .slice(0, workerCapacity(site));
+    // Fill only the working crew's missing tools; existing usable tools stay in use.
+    // Allocate from the shared stock so another site cannot claim the same item.
+    for (const type of definition.equipment.filter(type => type !== "feed")) {
+      const equipped = next.equipment.filter(e =>
+        e.siteId === definition.id && e.type === type && e.durability > 0,
+      ).length;
+      const resource = equipmentResources[type];
+      const quantity = Math.min(Math.max(0, crew.length - equipped), next.stock[resource]);
+      next.stock[resource] -= quantity;
+      for (let i = 0; i < quantity; i++) next.equipment.push({
+        id: ++next.equipmentSequence, siteId: definition.id, type, level: 1, durability: 100,
+      });
+    }
     for (const worker of crew) {
       if (definition.category === "livestock" && next.stock.feed > 0 &&
           !next.equipment.some(e => e.siteId === definition.id && e.type === "feed" && e.durability > 0 && !used.has(e.id)) &&
