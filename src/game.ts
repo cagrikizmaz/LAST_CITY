@@ -302,7 +302,7 @@ export function changeWorkers(
 }
 
 const initialState = (): GameState => ({
-  version: 17,
+  version: 18,
   hospital: {
     level: 0,
     doctors: 0,
@@ -1044,7 +1044,7 @@ export function loadGame(raw: string | null): GameState {
         stock,
         order: saved.version >= 14 ? order : null,
         offerDay:
-          saved.version < 17
+          saved.version < 18
             ? 0
             : Number.isSafeInteger(saved.offerDay)
               ? saved.offerDay
@@ -1052,7 +1052,7 @@ export function loadGame(raw: string | null): GameState {
                 ? saved.day
                 : 0,
         orderPool:
-          saved.version >= 17
+          saved.version >= 18
             ? (saved.orderPool ?? []).map((o: Order) => ({
                 ...o,
                 needs: { ...zeroStock(), ...o.needs },
@@ -1069,7 +1069,7 @@ export function loadGame(raw: string | null): GameState {
         basePrices: Object.fromEntries(
           resources.map((resource) => [
             resource,
-            saved.version >= 17 && Number.isFinite(saved.basePrices?.[resource]) && saved.basePrices[resource] > 0
+            saved.version >= 17 && (resource !== goldOre || saved.version >= 18) && Number.isFinite(saved.basePrices?.[resource]) && saved.basePrices[resource] > 0
               ? saved.basePrices[resource]
               : defaults.basePrices[resource],
           ]),
@@ -1077,14 +1077,14 @@ export function loadGame(raw: string | null): GameState {
         marketPrices: Object.fromEntries(
           resources.map((resource) => [
             resource,
-            saved.version >= 17 && Number.isFinite(saved.marketPrices?.[resource]) && saved.marketPrices[resource] > 0
+            saved.version >= 17 && (resource !== goldOre || saved.version >= 18) && Number.isFinite(saved.marketPrices?.[resource]) && saved.marketPrices[resource] > 0
               ? saved.marketPrices[resource]
               : defaults.marketPrices[resource],
           ]),
         ) as Record<Resource, number>,
         shelterCapacity,
         lastOrder: saved.lastOrder ? { penalty: 0, ...saved.lastOrder } : null,
-        version: 17,
+        version: 18,
         day: Number.isSafeInteger(saved.day) && saved.day >= 1 ? saved.day : 1,
         minuteOfDay:
           Number.isInteger(saved.minuteOfDay) &&
@@ -1321,6 +1321,10 @@ for (const [id, name, icon, recipes] of workshops) siteDefinitions.push({
 export const equipmentResources = Object.fromEntries(Object.entries(equipmentTypes).map(([type, info]) =>
   [type, product(type === "cart" ? "El Arabası" : info.name)],
 )) as Record<EquipmentType, Resource>;
+// Keep the mined resource ID and append the ingot so existing saves retain their stock and jobs.
+const goldOre = product("Altın");
+resourceNames[goldOre] = "Altın Cevheri";
+siteDefinitions.find(s => s.id === "furnace")!.recipes.push(recipe("Altın Külçesi", { "Altın Cevheri": 10 }));
 export const tradeResources = [...new Set(siteDefinitions.flatMap(s => s.recipes.length ? s.recipes.map(r => r.output) : [s.job]))];
 export function tradeResource(state: GameState, resource: Resource, quantity: number, direction: "buy" | "sell"): GameState {
   if (!tradeResources.includes(resource) || !Number.isSafeInteger(quantity) || quantity <= 0 || (direction !== "buy" && direction !== "sell")) return state;
@@ -1344,7 +1348,7 @@ const rawMaterialPrices: Record<string, number> = {
   "Çubuk": 2, "Kum": 3, "Kil": 4, "Taş": 5,
   "Buğday": 4, "Yumurta": 3, "Meyve": 6, "Odun": 8,
   "Süt": 7, "Koyun sütü": 9, "Yün": 12, "Et": 18, "Deri": 15,
-  "Kömür": 12, "Demir": 24, "Bakır": 36, "Gümüş": 120, "Altın": 360,
+  "Kömür": 12, "Demir": 24, "Bakır": 36, "Gümüş": 120, "Altın Cevheri": 25,
   // Catalog goods without an active production recipe also have explicit values.
   "Pamuk": 10, "Çelik": 90, "Tahta": 25, "Kâğıt": 18, "Kömür Briketi": 20,
   "Tuz": 4, "Şeker": 9, "Bal": 22, "Patates": 4, "Havuç": 5, "Domates": 6,

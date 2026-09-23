@@ -330,7 +330,7 @@ export function App() {
                   .map((s) => (
                     <article className="production-card" key={s.id}>
                       <button
-                        className={`site-card-link art-${s.category === "mine" ? 5 : s.category === "livestock" ? 2 : 1}`}
+                        className={`site-card-link ${s.id === "mine-4" ? "gold-mine-card" : ""} art-${s.category === "mine" ? 5 : s.category === "livestock" ? 2 : 1}`}
                         onClick={() => openSite(s)}
                       >
                         <span className="category-icon">{s.icon}</span>
@@ -351,6 +351,9 @@ export function App() {
                     </article>
                   ))}
               </div>
+            )}
+            {definition?.id === "mine-4" && (
+              <img className="gold-mine-banner" src="/assets/last-city-gold-mine.png" alt="Altın cevheri vagonu ve altın madeni girişi" />
             )}
             {definition && !site && (
               <section className="panel purchase-panel">

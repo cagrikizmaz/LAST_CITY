@@ -7,7 +7,7 @@ describe("resource pricing", () => {
   it("values scarce metals above common materials across market fluctuations", () => {
     let state = g.emptyState();
     for (let hour = 0; hour < 100; hour++) {
-      const prices = ["Çubuk", "Odun", "Kömür", "Demir", "Bakır", "Gümüş", "Altın"].map(n => g.marketPrice(state, resource(n)));
+      const prices = ["Çubuk", "Odun", "Kömür", "Demir", "Bakır", "Gümüş", "Altın Külçesi"].map(n => g.marketPrice(state, resource(n)));
       expect(prices).toEqual([...prices].sort((a, b) => a - b));
       for (const r of g.resources) {
         expect(g.marketPrice(state, r)).toBeGreaterThan(0);
@@ -50,4 +50,17 @@ describe("resource pricing", () => {
       expect(sold.money).toBeLessThan(state.money);
     }
   });
+});
+
+it("migrates mined gold to ore and resets its old price without losing assets", () => {
+  const state = g.emptyState();
+  const ore = g.siteDefinitions.find(s => s.id === "mine-4")!.job;
+  const ingot = g.siteDefinitions.find(s => s.id === "furnace")!.recipes.find(r => r.inputs[ore] === 10)!.output;
+  const old = { ...state, version: 17, stock: { ...state.stock, [ore]: 20 }, basePrices: { ...state.basePrices, [ore]: 360 }, marketPrices: { ...state.marketPrices, [ore]: 330 } };
+  const loaded = g.loadGame(JSON.stringify(old));
+  expect(loaded.stock[ore]).toBe(20);
+  expect(loaded.stock[ingot]).toBe(0);
+  expect(g.marketPrice(loaded, ore)).toBe(25);
+  expect(g.marketPrice(loaded, ingot)).toBe(293.5);
+  expect(g.loadGame(JSON.stringify(loaded)).marketPrices).toEqual(loaded.marketPrices);
 });

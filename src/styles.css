@@ -2280,3 +2280,20 @@ h3 {
   grid-row: span 2;
   align-self: center;
 }
+
+.site-card-link.gold-mine-card {
+  background:
+    linear-gradient(90deg, #141b18e8, #141b1860),
+    url("/assets/last-city-gold-mine.png") center / cover;
+}
+.gold-mine-banner {
+  display: block;
+  width: 100%;
+  max-height: 340px;
+  aspect-ratio: 2 / 1;
+  object-fit: cover;
+  object-position: center;
+  border: 1px solid #574a32;
+  border-radius: 12px;
+  margin: 0 0 18px;
+}

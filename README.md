@@ -16,7 +16,7 @@ npm run build
 - Orman: Oduncu, Avcı.
 - Tarım: Tarla, Bahçe.
 - Hayvancılık: İnek Ahırı, Kümes, Koyun Ağılı.
-- Maden: Kömür, Bakır, Kil, Kum, Altın, Gümüş, Taş, Demir.
+- Maden: Kömür, Bakır, Kil, Kum, Altın Cevheri, Gümüş, Taş, Demir.
 
 Kategori kartlarında ürün stokları, çalışan saha sayısı, eksik ekipman ve hammadde özetleri görünür. Kategoriye, ardından sahaya tıklayarak detay ekranını aç. Saatin yanındaki küçük kaynak simgeleri stokları gösterir ve ilgili sahaya kısayol sağlar. Sahada işçi, ekipman, ürün bazında üretim hedefleri ve sağ alttaki depo doluluk grafikleri yönetilir. Sağ alttaki asistan portreleri ihtiyaç sayısını bildirir; tıklayınca ilgili sorumlu açılır pencerede ihtiyaçlarını anlatır ve ekipman satın almayı sağlar. Escape ile kapatılabilir.
 
@@ -83,3 +83,5 @@ Doğrulama: `npm run test:lan`; Android Java tarayıcısı ile masaüstü oda ke
 `APK-Olustur.bat` dosyasına çift tıklayın. Güncel oyun derlenir ve APK konumu açılır: `artifacts/Farming.apk` (debug). Terminal: `npm run android:apk`.
 
 JDK 21 ve Android SDK gereklidir; mevcut yerel araçlar otomatik bulunur. Gradle önbelleği ve artımlı derleme kullanılır, temiz derleme yapılmaz. Web içeriği her çalıştırmada güncellenir. Hata olursa pencere açık kalır.
+
+Fırın: 10 altın cevheri → 1 altın külçesi. Baz piyasa fiyatları: cevher 25 ₺, külçe 293,50 ₺.

@@ -18,7 +18,8 @@ const grain = (color: string) => path("M31 52V16M31 25 21 17M31 34 20 26M31 43 2
 const wheel = (x: number, y: number, r = 6) => circle(x, y, r, "#455763") + circle(x, y, 2, metal);
 const device = (color: string, detail: string) => rect(13, 17, 38, 34, color, 5) + detail;
 const art: Record<string, string> = {
-  "Altın": ingot("#eac05d") + circle(32, 31, 4, "#fff0a7"),
+  "Altın Cevheri": rock("#8f8978", "M17 23 31 33 51 29M31 33 33 53") + path("M21 30 27 24 32 31 26 36Z", gold) + path("M35 41 42 35 47 42 39 46Z", gold),
+  "Altın Külçesi": ingot("#eac05d") + circle(32, 31, 4, "#fff0a7"),
   "Gümüş": ingot("#dce4ee") + path("M28 27 36 34M36 27 28 34"),
   "Kaymak": path("M12 34H52L45 53H19Z", "#a6c7c3") + path("M15 34Q18 25 27 27Q28 15 35 23Q47 22 49 34Z", "#f5e4b4"),
   "Koyun sütü": bottle("#e2ddd0", circle(28, 36, 5, "#fff5e2") + circle(35, 36, 5, "#fff5e2") + circle(32, 43, 4, "#78858b")),
